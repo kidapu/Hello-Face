@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hello, Face!</title>
+<style>
+  :root { --bg: #eaf4ff; --ink: #1c2340; --card: #ffffff; --sub: #5a6380; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #11152a; --ink: #f3f0ea; --card: #1c2340; --sub: #a7adc4; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+         font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+         display: flex; flex-direction: column; align-items: center; padding: 48px 16px; }
+  h1 { font-size: 2.4rem; margin: 0 0 4px; }
+  p.tag { color: var(--sub); margin: 0 0 32px; }
+  a.card { display: block; width: 100%; max-width: 360px; background: var(--card); color: inherit;
+           text-decoration: none; border-radius: 16px; padding: 20px 22px; margin-bottom: 14px;
+           box-shadow: 0 4px 18px rgba(0,0,0,.08); }
+  a.card b { font-size: 1.2rem; }
+  a.card span { display: block; color: var(--sub); font-size: .9rem; margin-top: 4px; }
+  .soon { opacity: .45; pointer-events: none; }
+</style>
+</head>
+<body>
+  <h1>Hello, Face!</h1>
+  <p class="tag">Faces hiding in clouds, leaves, anything.</p>
+  <a class="card" href="cloud/"><b>☁️ Cloud Camera</b><span>空にカメラを向けると、雲に猫やくまの顔が出てくる</span></a>
+  <a class="card soon"><b>🍃 Leaves</b><span>coming soon</span></a>
+  <a class="card soon"><b>🌊 Fluid</b><span>coming soon</span></a>
+</body>
+</html>
