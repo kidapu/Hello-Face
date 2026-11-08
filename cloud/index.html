@@ -74,7 +74,7 @@ const P = {
   follow: 0.35,       // how quickly a face follows its cloud (0..1 per detection)
   // character
   kind: 'auto', expression: 'random', eyeSize: 1.2, eyeGap: 1.0, ears: true, earSize: 0.8,
-  whiskers: true, paws: true, blush: 0.25,
+  whiskers: true, paws: true, arms: true, snakeBody: false, blush: 0.25,
   // pen
   ink: '#1c2340', lineW: 2.4, boil: 1.0, boilFps: 8,
   blink: true, gaze: true,
@@ -148,7 +148,9 @@ function newTrack(f, W) {
   const r = mulberry(seedBase + nextId * 7919);
   return { id: nextId++, x: f.fx / W, y: f.fy / W, r: f.r / W, ears: f.ears && f.ears.map((e) => ({ ...e, x: e.x / W, y: e.y / W })),
     paws: f.paws && f.paws.map((p) => ({ x: p.x / W, y: p.y / W })), hits: 1, miss: 0, alpha: 0,
-    kind0: KINDS[r() < 0.5 ? 0 : 1], expr0: EXPRS[Math.floor(r() * EXPRS.length)], kindOver: null, exprOver: null,
+    body: f.body && f.body.map((q) => ({ x: q.x / W, y: q.y / W, half: q.half / W })),
+    arms: f.arms && f.arms.map((a) => ({ sx: a.sx / W, sy: a.sy / W, x: a.x / W, y: a.y / W })),
+    wings: f.wings && f.wings.map((q) => ({ x: q.x / W, y: q.y / W })), hole: f.hole, tail: f.tail && { ...f.tail, x: f.tail.x / W, y: f.tail.y / W }, hint: f.hint, kind0: f.hint || KINDS[r() < 0.5 ? 0 : 1], kindR: KINDS[r() < 0.5 ? 0 : 1], expr0: EXPRS[Math.floor(r() * EXPRS.length)], kindOver: null, exprOver: null,
     pupil: 0.48 + r() * 0.17, ph: r() * 100, seed: Math.floor(r() * 1e6) };
 }
 function absorb(t, f, W) {
@@ -163,6 +165,14 @@ function absorb(t, f, W) {
       return o; });
   };
   t.ears = pts(t.ears, f.ears, true); t.paws = pts(t.paws, f.paws, false);
+  // the body follows the cloud as it is now; arms come and go with the lobes
+  t.body = f.body ? f.body.map((q) => ({ x: q.x / W, y: q.y / W, half: q.half / W })) : t.kind0 === 'snake' ? t.body : null;
+  if (f.hole) t.hole = f.hole;
+  if (f.wings) t.wings = t.wings ? f.wings.map((q, i) => ({ x: mix(t.wings[i].x, q.x / W), y: mix(t.wings[i].y, q.y / W) })) : f.wings.map((q) => ({ x: q.x / W, y: q.y / W }));
+  if (f.tail) t.tail = t.tail ? { x: mix(t.tail.x, f.tail.x / W), y: mix(t.tail.y, f.tail.y / W), dx: f.tail.dx, dy: f.tail.dy } : { ...f.tail, x: f.tail.x / W, y: f.tail.y / W };
+  if (!f.arms) t.arms = null;
+  else if (!t.arms || t.arms.length !== f.arms.length) t.arms = f.arms.map((a) => ({ sx: a.sx / W, sy: a.sy / W, x: a.x / W, y: a.y / W }));
+  else t.arms = f.arms.map((a, i) => { const c = t.arms[i]; return { sx: mix(c.sx, a.sx / W), sy: mix(c.sy, a.sy / W), x: mix(c.x, a.x / W), y: mix(c.y, a.y / W) }; });
   t.hits++; t.miss = 0;
 }
 function updateTracks(found, dt) {
@@ -185,16 +195,20 @@ function updateTracks(found, dt) {
 let boilFrame = 0;
 const style = () => ({ ink: P.ink, lineW: P.lineW, boil: P.boil, boilFrame, eyeSize: P.eyeSize, eyeGap: P.eyeGap,
   earSize: P.earSize, ears: P.ears, whiskers: P.whiskers, paws: P.paws, blush: P.blush,
-  dpr: Math.min(2, window.devicePixelRatio || 1), gaze: P.gaze, blink: P.blink });
+  dpr: Math.min(2, window.devicePixelRatio || 1), gaze: P.gaze, blink: P.blink, snakeBody: P.snakeBody });
 function drawTrack(t, time, o) {
   const [x, y] = toScr(t.x, t.y + Math.sin(time * 0.9 + t.ph) * t.r * 0.01);
   const U = t.r * det.w * P.faceScale * view.k * (1 + 0.012 * Math.sin(time * 1.4 + t.ph));
   t.x0 = x; t.y0 = y; t.U0 = U;
-  const d = Object.assign(t, { kind: t.kindOver || (P.kind === 'auto' ? t.kind0 : P.kind),
+  const d = Object.assign(t, { kind: t.kindOver || (P.kind === 'auto' ? t.kind0 : P.kind === 'random' ? t.kindR : P.kind),
     expr: t.exprOver || (P.expression === 'random' ? t.expr0 : P.expression) });
   Doodle.draw(ctx, { ...d, x, y, U, rot: 0, alpha: t.alpha,
     ears: t.ears && t.ears.map((e) => { const [ex, ey] = toScr(e.x, e.y); return { x: ex, y: ey, nx: e.nx, ny: e.ny }; }),
-    paws: t.paws && t.paws.map((p) => { const [px, py] = toScr(p.x, p.y); return { x: px, y: py }; }) }, o);
+    paws: t.paws && t.paws.map((p) => { const [px, py] = toScr(p.x, p.y); return { x: px, y: py }; }),
+    wings: t.wings && t.wings.map((q) => { const [wx, wy] = toScr(q.x, q.y); return { x: wx, y: wy }; }),
+    tail: t.tail && (() => { const [tx, ty] = toScr(t.tail.x, t.tail.y); return { x: tx, y: ty, dx: t.tail.dx, dy: t.tail.dy }; })(),
+    arms: P.arms && t.arms && t.arms.map((a) => { const [sx, sy] = toScr(a.sx, a.sy), [ax, ay] = toScr(a.x, a.y); return { sx, sy, x: ax, y: ay }; }),
+    body: t.body && t.body.map((q) => { const [bx, by] = toScr(q.x, q.y); return { x: bx, y: by, half: q.half * det.w * view.k }; }) }, o);
 }
 // the clouds' edges, traced with the same pen as the faces
 function drawOutlines(o) {
@@ -265,7 +279,7 @@ cv.addEventListener('pointerdown', (e) => {
 cv.addEventListener('pointerup', () => {
   if (!pressT) return; clearTimeout(pressT); pressT = null;
   const t = trackAt(...pressAt); if (!t) return;
-  const cur = t.kindOver || (P.kind === 'auto' ? t.kind0 : P.kind);
+  const cur = t.kindOver || (P.kind === 'auto' ? t.kind0 : P.kind === 'random' ? t.kindR : P.kind);
   t.kindOver = KINDS[(KINDS.indexOf(cur) + 1) % KINDS.length];
 });
 cv.addEventListener('pointercancel', () => { clearTimeout(pressT); pressT = null; });
@@ -314,7 +328,9 @@ gui.hide();
 $('more').onclick = () => (gui._hidden ? gui.show() : gui.hide());
 gui.add({ flip() { facing = facing === 'environment' ? 'user' : 'environment'; startCam(); } }, 'flip').name('カメラ切替');
 const gc = gui.addFolder('キャラ');
-gc.add(P, 'kind', ['auto', ...KINDS]).name('種類');
+gc.add(P, 'kind', ['auto', 'random', ...KINDS]).name('種類 (auto = 雲の形で)');
+gc.add(P, 'arms').name('手 (雲の張り出し)');
+gc.add(P, 'snakeBody').name('ヘビの体の線');
 gc.add(P, 'expression', ['random', ...EXPRS]).name('表情');
 gc.add(P, 'faceScale', 0.4, 1.4, 0.01).name('顔の大きさ');
 gc.add(P, 'eyeSize', 0.5, 1.8, 0.01).name('目の大きさ');
