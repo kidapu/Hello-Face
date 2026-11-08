@@ -28,6 +28,10 @@
   #shutter { width: 76px; height: 76px; border: 5px solid #fff; background: #ffffff70; }
   #shutter:active { background: #fff; }
   #rec.on { background: #e5334d; }
+  .btn[hidden] { display: none; }
+  #ai { font-size: 15px; font-weight: 700; letter-spacing: 0.5px; }
+  #ai.on { background: #3a7be0; }
+  #ai.busy { opacity: 0.55; }
   #msg { position: fixed; top: calc(14px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); background: #000a;
     padding: 7px 16px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap; }
   #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s; }
@@ -53,7 +57,7 @@
 </div>
 <div id="bar">
   <button class="btn" id="pick" aria-label="写真を選ぶ">🖼</button>
-  <button class="btn" id="shuffle" aria-label="キャラを入れ替える">🎲</button>
+  <button class="btn" id="ai" aria-label="AIで見る" hidden>AI</button>
   <button class="btn" id="shutter" aria-label="撮影"></button>
   <button class="btn" id="rec" aria-label="録画">●</button>
   <button class="btn" id="more" aria-label="設定">⚙</button>
@@ -64,6 +68,7 @@
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
 <script src="../lib/doodle.js"></script>
 <script src="../lib/cloudfind.js"></script>
+<script src="../lib/samfind.js"></script>
 <script>
 // Cloud Faces: camera (or a photo) -> find the cloud bulges (cloudfind.js) several times a
 // second -> follow each bulge as a track -> doodle a cat / bear face on it (doodle.js).
@@ -79,6 +84,10 @@ const P = {
   ink: '#1c2340', lineW: 2.4, boil: 1.0, boilFps: 8,
   blink: true, gaze: true,
   showMask: false,
+  aiShow: true,       // AI mode: show every part the AI cut out, one colour each
+  aiGround: true,     // AI mode: no faces on the ground (low in the picture, by the gyro / the skyline)
+  aiMaxArea: 0.3,     // AI mode: bigger parts (the ground, the whole sky) get no face
+  aiGrid: 6,          // AI mode: points across the picture to cut things out at
   outline: true, outlineW: 1.0,   // trace the clouds' edges with the pen
 };
 const { KINDS, EXPRS, mulberry } = Doodle;
@@ -104,7 +113,7 @@ async function startCam() {
       video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
     video.srcObject = stream;
     await video.play();
-    mode = 'cam'; img = null; tracks = []; showApp();
+    aiOff(); mode = 'cam'; img = null; tracks = []; showApp();
     return true;
   } catch (e) {
     $('err').textContent = 'カメラを開けませんでした: ' + (e.name || e.message || e);
@@ -115,7 +124,7 @@ function usePhoto(file) {
   const im = new Image();
   im.onload = () => {
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
-    img = im; mode = 'photo'; tracks = []; lastDet = 0; showApp();
+    aiOff(); img = im; mode = 'photo'; tracks = []; lastDet = 0; showApp();
   };
   im.src = URL.createObjectURL(file);
 }
@@ -218,6 +227,43 @@ function drawOutlines(o) {
   det._ol.forEach((l, k) => Doodle.stroke(ctx, l.pts.map(([x, y]) => [view.ox + x * view.k, view.oy + y * view.k]), o,
     { width: P.outlineW, seed: 1000 + k, closed: l.closed }));
 }
+function drawParts() {
+  const W = ai.W, H = ai.H;
+  if (!ai.view) {
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d'), id = g.createImageData(W, H);
+    ai.parts.forEach((pt, k) => {
+      const hue = (k * 137.5) % 360, a = pt.kind === 'thing' ? 120 : 45;
+      const [r, gg, b] = hsl(hue, 0.75, 0.55);
+      for (let i = 0; i < W * H; i++) if (pt.mask[i]) {
+        if (pt.kind !== 'thing' && ((i % W) + Math.floor(i / W)) % 4) continue;   // sky / too big: hatched
+        id.data[i * 4] = r; id.data[i * 4 + 1] = gg; id.data[i * 4 + 2] = b; id.data[i * 4 + 3] = a;
+      }
+    });
+    g.putImageData(id, 0, 0);
+    ai.view = { c, lines: ai.parts.map((pt, k) => ({ k, kind: pt.kind, ls: CloudFind.outlines({ w: W, h: H, mask: pt.mask }, { outlineMin: 4 }) })) };
+  }
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(ai.view.c, view.ox, view.oy, W * view.k, H * view.k);
+  ctx.imageSmoothingEnabled = true;
+  ctx.save(); ctx.lineWidth = 2 * Math.min(2, window.devicePixelRatio || 1); ctx.lineJoin = 'round';
+  for (const { k, kind, ls } of ai.view.lines) {
+    const [r, g, b] = hsl((k * 137.5) % 360, 0.85, 0.4);
+    ctx.strokeStyle = `rgba(${r},${g},${b},${kind === 'thing' ? 1 : 0.5})`;
+    for (const l of ls) { ctx.beginPath(); l.pts.forEach(([x, y], i) => { const X = view.ox + x * view.k, Y = view.oy + y * view.k; i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); if (l.closed) ctx.closePath(); ctx.stroke(); }
+  }
+  const hz = ai.horizon;
+  if (hz && P.aiGround && Math.abs(hz.off) < 1e6) {   // the horizon used for the ground, dashed
+    const cx = W / 2 + hz.dx * hz.off, cy = H / 2 + hz.dy * hz.off, L = W + H, toS = (x, y) => [view.ox + x * view.k, view.oy + y * view.k];
+    ctx.setLineDash([10, 8]); ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.beginPath();
+    ctx.moveTo(...toS(cx + hz.dy * L, cy - hz.dx * L)); ctx.lineTo(...toS(cx - hz.dy * L, cy + hz.dx * L)); ctx.stroke();
+  }
+  ctx.restore();
+}
+function hsl(h, s, l) {
+  const f = (n) => { const k = (n + h / 30) % 12, a = s * Math.min(l, 1 - l); return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))); };
+  return [f(0), f(8), f(4)];
+}
 let maskCanvas = null;
 function drawMask() {
   if (!maskCanvas) maskCanvas = document.createElement('canvas');
@@ -237,7 +283,7 @@ function frame(now) {
   ctx.fillStyle = '#0d1220'; ctx.fillRect(0, 0, cv.width, cv.height);
   if (mode && sw && sh) {
     const every = mode === 'photo' ? 400 : 1000 / P.detectFps;
-    if (now - lastDet > every) {
+    if (now - lastDet > every && !ai.active) {
       const ddt = lastDet ? Math.min(0.5, (now - lastDet) / 1000) : 0; lastDet = now;
       det = CloudFind.analyse(source(), sw, sh, P);
       updateTracks(CloudFind.find(det, P), ddt);
@@ -246,9 +292,10 @@ function frame(now) {
     ctx.drawImage(source(), view.ox, view.oy, sw * view.s, sh * view.s);
     if (det) {
       if (P.showMask) drawMask();
+      if (ai.active && P.aiShow && ai.parts.length) drawParts();
       boilFrame = P.boil > 0 ? Math.floor(now / 1000 * P.boilFps) : 0;
       const o = style(), time = now / 1000;
-      if (P.outline) drawOutlines(o);
+      if (P.outline && !(ai.active && P.aiShow)) drawOutlines(o);
       for (const t of tracks) {
         const target = t.hits >= 3 && t.miss < 0.3 ? 1 : t.miss >= 0.3 ? 0 : t.alpha;
         t.alpha += (target - t.alpha) * Math.min(1, dt * 5);
@@ -263,6 +310,134 @@ requestAnimationFrame(frame);
 // ?photo=photos/clouds.jpg opens that picture directly (testing on a PC)
 { const q = new URLSearchParams(location.search).get('photo');
   if (q) fetch(q.includes('/') ? q : 'photos/' + q).then((r) => r.blob()).then(usePhoto).catch(() => {}); }
+
+// ---------------- AI mode (the AI button): freeze the frame and cut it into things with Segment Anything
+// (SlimSAM, Apache-2.0; no names, just the shapes): taps on a grid of points, each giving the outline of the
+// thing under it; every thing (clouds, trees, buildings, ...) then gets the animal its shape looks like.
+// The model is downloaded the first time the button is pressed, then cached by the browser.
+const ai = { active: false, busy: false, prev: null, parts: [], view: null, horizon: null };
+let tilt = null;   // last deviceorientation (beta, gamma in degrees)
+addEventListener('deviceorientation', (e) => { if (e.beta != null && e.gamma != null) tilt = { beta: e.beta, gamma: e.gamma, t: performance.now() }; });
+function askTilt() {   // iOS: the permission has to be asked from a tap
+  try { if (window.DeviceOrientationEvent && DeviceOrientationEvent.requestPermission) DeviceOrientationEvent.requestPermission().catch(() => {}); } catch (e) { /* no gyro */ }
+}
+// where the ground is in a W x H frame: the "down" direction on screen and the horizon, as an offset from
+// the centre along it (grid px). With the gyro (camera only): the camera's elevation gives the horizon
+// (65 deg field of view along the long side); without it: down = the bottom, horizon = the skyline.
+function horizonOf(W, H, cdet) {
+  if (mode === 'cam' && tilt && performance.now() - tilt.t < 3000) {
+    const b = tilt.beta * Math.PI / 180, g = tilt.gamma * Math.PI / 180;
+    const ux = -Math.cos(b) * Math.sin(g), uy = Math.sin(b);              // world up, in the screen plane (device coords)
+    const el = Math.asin(Math.max(-1, Math.min(1, -Math.cos(b) * Math.cos(g))));   // camera elevation (+ = up)
+    const a = ((screen.orientation && screen.orientation.angle) || window.orientation || 0) * Math.PI / 180;
+    const sx = ux * Math.cos(a) - uy * Math.sin(a), sy = ux * Math.sin(a) + uy * Math.cos(a);
+    const l = Math.hypot(sx, sy);
+    if (l > 0.2) {   // not pointed straight up / down
+      const dx = -sx / l, dy = sy / l;                                   // down, in picture coords (y down)
+      const half = Math.abs(dx) * W / 2 + Math.abs(dy) * H / 2, tanHalf = 0.64 * half / (Math.max(W, H) / 2);
+      return { dx, dy, off: Math.tan(el) / tanHalf * half, gyro: true, el: el * 180 / Math.PI };
+    }
+    if (el < 0) return { dx: 0, dy: 1, off: -1e9, gyro: true, el: el * 180 / Math.PI };   // straight down: all ground
+  }
+  let sl = -1;   // lowest row that is still 10% blue sky
+  for (let y = 0; y < H; y++) { let c = 0; for (let x = 0; x < W; x++) c += cdet.sky[y * W + x]; if (c > W * 0.1) sl = y; }
+  return { dx: 0, dy: 1, off: (sl >= 0 ? sl + 1 : H * 0.5) - H / 2, gyro: false };
+}
+// a part is the ground when it lies (mostly) below the horizon, reaches the bottom edge (the "down" side)
+// and does not look like the main subject (small-ish, near the middle, not spanning the picture)
+function isGround(mask, W, H, hz) {
+  let a = 0, low = 0, edge = 0, sx = 0, sy = 0, p0 = 1e9, p1 = -1e9;
+  const px = -hz.dy, py = hz.dx;   // across
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!mask[y * W + x]) continue;
+    const X = x + 0.5 - W / 2, Y = y + 0.5 - H / 2, d = X * hz.dx + Y * hz.dy, q = X * px + Y * py;
+    a++; sx += x; sy += y; if (d > hz.off) low++;
+    if (q < p0) p0 = q; if (q > p1) p1 = q;
+    const onEdge = (x === 0 && hz.dx < -0.5) || (x === W - 1 && hz.dx > 0.5) || (y === 0 && hz.dy < -0.5) || (y === H - 1 && hz.dy > 0.5);
+    if (onEdge) edge++;
+  }
+  if (!a || low < a * 0.7 || edge < 2) return false;
+  const across = (p1 - p0) / (Math.abs(hz.dx) * H + Math.abs(hz.dy) * W);   // share of the picture's width it spans
+  const cx = sx / a / W - 0.5, cy = sy / a / H - 0.5;
+  const main = across < 0.6 && a < W * H * 0.15 && Math.hypot(cx, cy) < 0.3;
+  return !main;
+}
+function aiOff() {
+  if (!ai.active) return;
+  ai.active = false; $('ai').classList.remove('on');
+  if (ai.prev) { mode = ai.prev.mode; img = ai.prev.img; ai.prev = null; }
+  tracks = []; lastDet = 0;
+}
+async function aiRun() {
+  if (ai.busy) return;
+  if (ai.active) { aiOff(); return; }
+  const [sw, sh] = srcSize(); if (!mode || !sw) return;
+  ai.busy = true; $('ai').classList.add('busy');
+  askTilt();
+  // ask the browser to keep the downloaded model (else it may be cleared when storage runs low)
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* not supported */ }
+  try {
+    const k = Math.min(1, 1024 / Math.max(sw, sh)), c = document.createElement('canvas');
+    c.width = Math.round(sw * k); c.height = Math.round(sh * k);
+    c.getContext('2d').drawImage(source(), 0, 0, c.width, c.height);
+    if (!SamFind.ready) say('AI: はじめてなのでモデルをダウンロードします（約15〜25 MB、次からはいりません）', 4000);
+    await SamFind.load((t) => say(t, 60000));
+    say('AI: 画面のものを切り分けています…', 60000);
+    await SamFind.embed(c);
+    // the colour analysis on the same grid: its blue-sky pixels tell the open sky (not a thing) apart
+    const cdet = CloudFind.analyse(c, c.width, c.height, P), W = cdet.w, H = cdet.h, n = W * H;
+    const covered = new Uint8Array(n), regions = []; ai.parts = []; ai.view = null; ai.W = W; ai.H = H;
+    const hz = horizonOf(W, H, cdet); ai.horizon = hz;
+    const GX = P.aiGrid, GY = Math.max(3, Math.round(GX * H / W));
+    for (let gy = 0; gy < GY; gy++) for (let gx = 0; gx < GX; gx++) {
+      const u = (gx + 0.5) / GX, v = (gy + 0.5) / GY, ci = Math.floor(v * H) * W + Math.floor(u * W);
+      if (covered[ci]) continue;   // already inside a thing we have
+      const m = await SamFind.segment(u, v, W, H, 'auto', 0.45);
+      if (!m || m.area < n * 0.012) continue;
+      ai.parts.push({ mask: m.mask, kind: 'thing' });
+      let ov = 0; for (let i = 0; i < n; i++) if (m.mask[i] && covered[i]) ov++;
+      if (ov > m.area * 0.5) { ai.parts.pop(); continue; }   // mostly a thing we have
+      if (P.aiGround && isGround(m.mask, W, H, hz)) { ai.parts[ai.parts.length - 1].kind = 'ground'; for (let i = 0; i < n; i++) if (m.mask[i]) covered[i] = 1; continue; }
+      if (m.area > n * P.aiMaxArea) { ai.parts[ai.parts.length - 1].kind = 'big'; for (let i = 0; i < n; i++) if (m.mask[i]) covered[i] = 1; continue; }   // the ground, a wall: too big to be a thing
+      let blue = 0; for (let i = 0; i < n; i++) if (m.mask[i] && cdet.sky[i]) blue++;
+      if (blue > m.area * 0.5) { ai.parts[ai.parts.length - 1].kind = 'sky'; for (let i = 0; i < n; i++) if (m.mask[i]) covered[i] = 1; continue; }   // the open sky
+      for (let i = 0; i < n; i++) if (m.mask[i]) covered[i] = 1;
+      regions.push(m);
+    }
+    // each thing: the animal its shape picks (as for the clouds)
+    const faces = [], all = new Uint8Array(n);
+    for (const m of regions) {
+      const gd = CloudFind.fromMask(m.mask, W, H, 0.01);
+      for (const f of CloudFind.find(gd, { ...P, maxFaces: 1 })) {
+        if (faces.some((q) => Math.hypot(q.fx - f.fx, q.fy - f.fy) < (q.r + f.r) * 0.9)) continue;
+        f.fy = Math.min(H - f.r * 1.15, f.fy);
+        faces.push(f);
+        for (let i = 0; i < n; i++) if (gd.mask[i]) all[i] = 1;
+      }
+    }
+    faces.sort((a, b) => b.r - a.r);
+    const keep = faces.slice(0, P.maxFaces + 2);
+    ai.prev = { mode, img }; mode = 'photo'; img = c; ai.active = true; $('ai').classList.add('on');
+    det = CloudFind.fromMask(all, W, H, 0);
+    tracks = keep.map((f) => Object.assign(newTrack(f, W), { hits: 3 }));
+    updateView();
+    const cnt = (k) => ai.parts.filter((q) => q.kind === k).length, nSky = cnt('sky'), nBig = cnt('big'), nGr = cnt('ground');
+    say(`AI: ${ai.parts.length} 個に切り分け（空 ${nSky}・地面 ${nGr}・大きすぎ ${nBig}・もの ${regions.length}）${hz.gyro ? '' : ' ※ジャイロなし'}→ ${keep.length} 匹（もう一度 AI で戻る）`, 5000);
+  } catch (e) {
+    console.error(e);
+    say('AI を使えませんでした: ' + (e.message || e), 4000);
+  } finally {
+    ai.busy = false; $('ai').classList.remove('busy');
+  }
+}
+$('ai').onclick = () => aiRun();
+// the AI button only shows where the AI runs on the GPU (WebGPU with fp16); elsewhere it would be too slow.
+// Only asks the browser about the GPU: nothing is downloaded. ?samdevice=wasm shows it anyway (testing).
+(async () => {
+  let ok = new URLSearchParams(location.search).get('samdevice') === 'wasm';
+  try { const g = navigator.gpu && await navigator.gpu.requestAdapter(); if (g && g.features.has('shader-f16')) ok = true; } catch (e) { /* no WebGPU */ }
+  $('ai').hidden = !ok;
+})();
 
 // ---------------- touch: tap a face = next character, hold = next expression
 let pressT = null, pressAt = null;
@@ -287,11 +462,6 @@ cv.addEventListener('pointerup', () => {
 cv.addEventListener('pointercancel', () => { clearTimeout(pressT); pressT = null; });
 
 // ---------------- buttons
-$('shuffle').onclick = () => {
-  seedBase = Math.floor(Math.random() * 1e6);
-  for (const t of tracks) { const r = mulberry(seedBase + t.id * 7919);
-    t.kind0 = KINDS[r() < 0.5 ? 0 : 1]; t.expr0 = EXPRS[Math.floor(r() * EXPRS.length)]; t.kindOver = t.exprOver = null; t.seed = Math.floor(r() * 1e6); }
-};
 function stamp() { const d = new Date(), p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; }
 async function shareOrSave(blob, name) {
@@ -357,6 +527,9 @@ gd.add(P, 'sep', 0.6, 2.5, 0.01).name('顔どうしの間隔');
 gd.add(P, 'follow', 0.05, 1, 0.01).name('追いかける速さ');
 gd.add(P, 'detectFps', 2, 30, 1).name('検出の回数/秒');
 gd.add(P, 'showMask').name('雲マスク表示');
+gd.add(P, 'aiGrid', 3, 10, 1).name('AI: 切り分ける点の数 (横)');
+gd.add(P, 'aiShow').name('AI: 切り分けた範囲を表示');
+gd.add(P, 'aiGround').name('AI: 地面には顔を付けない');
 gc.close(); gp.close(); gd.close();
 </script>
 </body>
