@@ -150,7 +150,7 @@ function newTrack(f, W) {
     paws: f.paws && f.paws.map((p) => ({ x: p.x / W, y: p.y / W })), hits: 1, miss: 0, alpha: 0,
     body: f.body && f.body.map((q) => ({ x: q.x / W, y: q.y / W, half: q.half / W })),
     arms: f.arms && f.arms.map((a) => ({ sx: a.sx / W, sy: a.sy / W, x: a.x / W, y: a.y / W })),
-    wings: f.wings && f.wings.map((q) => ({ x: q.x / W, y: q.y / W })), hole: f.hole, tail: f.tail && { ...f.tail, x: f.tail.x / W, y: f.tail.y / W }, hint: f.hint, kind0: f.hint || KINDS[r() < 0.5 ? 0 : 1], kindR: KINDS[r() < 0.5 ? 0 : 1], expr0: EXPRS[Math.floor(r() * EXPRS.length)], kindOver: null, exprOver: null,
+    wings: f.wings && f.wings.map((q) => ({ x: q.x / W, y: q.y / W })), hole: f.hole, holePoly: f.holePoly && f.holePoly.map((q) => ({ x: q.x / W, y: q.y / W })), tail: f.tail && { ...f.tail, x: f.tail.x / W, y: f.tail.y / W }, hint: f.hint, kind0: f.hint || KINDS[r() < 0.5 ? 0 : 1], kindR: KINDS[r() < 0.5 ? 0 : 1], expr0: EXPRS[Math.floor(r() * EXPRS.length)], kindOver: null, exprOver: null,
     pupil: 0.48 + r() * 0.17, ph: r() * 100, seed: Math.floor(r() * 1e6) };
 }
 function absorb(t, f, W) {
@@ -168,6 +168,7 @@ function absorb(t, f, W) {
   // the body follows the cloud as it is now; arms come and go with the lobes
   t.body = f.body ? f.body.map((q) => ({ x: q.x / W, y: q.y / W, half: q.half / W })) : t.kind0 === 'snake' ? t.body : null;
   if (f.hole) t.hole = f.hole;
+  if (f.holePoly) t.holePoly = f.holePoly.map((q) => ({ x: q.x / W, y: q.y / W }));
   if (f.wings) t.wings = t.wings ? f.wings.map((q, i) => ({ x: mix(t.wings[i].x, q.x / W), y: mix(t.wings[i].y, q.y / W) })) : f.wings.map((q) => ({ x: q.x / W, y: q.y / W }));
   if (f.tail) t.tail = t.tail ? { x: mix(t.tail.x, f.tail.x / W), y: mix(t.tail.y, f.tail.y / W), dx: f.tail.dx, dy: f.tail.dy } : { ...f.tail, x: f.tail.x / W, y: f.tail.y / W };
   if (!f.arms) t.arms = null;
@@ -205,6 +206,7 @@ function drawTrack(t, time, o) {
   Doodle.draw(ctx, { ...d, x, y, U, rot: 0, alpha: t.alpha,
     ears: t.ears && t.ears.map((e) => { const [ex, ey] = toScr(e.x, e.y); return { x: ex, y: ey, nx: e.nx, ny: e.ny }; }),
     paws: t.paws && t.paws.map((p) => { const [px, py] = toScr(p.x, p.y); return { x: px, y: py }; }),
+    holePoly: t.holePoly && t.holePoly.map((q) => { const [hx, hy] = toScr(q.x, q.y); return { x: hx, y: hy }; }),
     wings: t.wings && t.wings.map((q) => { const [wx, wy] = toScr(q.x, q.y); return { x: wx, y: wy }; }),
     tail: t.tail && (() => { const [tx, ty] = toScr(t.tail.x, t.tail.y); return { x: tx, y: ty, dx: t.tail.dx, dy: t.tail.dy }; })(),
     arms: P.arms && t.arms && t.arms.map((a) => { const [sx, sy] = toScr(a.sx, a.sy), [ax, ay] = toScr(a.x, a.y); return { sx, sy, x: ax, y: ay }; }),
