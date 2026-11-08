@@ -79,6 +79,7 @@ const P = {
   ink: '#1c2340', lineW: 2.4, boil: 1.0, boilFps: 8,
   blink: true, gaze: true,
   showMask: false,
+  outline: false, outlineW: 1.0,   // trace the clouds' edges with the pen
 };
 const { KINDS, EXPRS, mulberry } = Doodle;
 const $ = (id) => document.getElementById(id);
@@ -195,6 +196,12 @@ function drawTrack(t, time, o) {
     ears: t.ears && t.ears.map((e) => { const [ex, ey] = toScr(e.x, e.y); return { x: ex, y: ey, nx: e.nx, ny: e.ny }; }),
     paws: t.paws && t.paws.map((p) => { const [px, py] = toScr(p.x, p.y); return { x: px, y: py }; }) }, o);
 }
+// the clouds' edges, traced with the same pen as the faces
+function drawOutlines(o) {
+  if (det._ol === undefined) det._ol = CloudFind.outlines(det, P);
+  det._ol.forEach((l, k) => Doodle.stroke(ctx, l.pts.map(([x, y]) => [view.ox + x * view.k, view.oy + y * view.k]), o,
+    { width: P.outlineW, seed: 1000 + k, closed: l.closed }));
+}
 let maskCanvas = null;
 function drawMask() {
   if (!maskCanvas) maskCanvas = document.createElement('canvas');
@@ -225,6 +232,7 @@ function frame(now) {
       if (P.showMask) drawMask();
       boilFrame = P.boil > 0 ? Math.floor(now / 1000 * P.boilFps) : 0;
       const o = style(), time = now / 1000;
+      if (P.outline) drawOutlines(o);
       for (const t of tracks) {
         const target = t.hits >= 3 && t.miss < 0.3 ? 1 : t.miss >= 0.3 ? 0 : t.alpha;
         t.alpha += (target - t.alpha) * Math.min(1, dt * 5);
@@ -319,6 +327,8 @@ const gp = gui.addFolder('ペン');
 gp.addColor(P, 'ink').name('線の色');
 gp.add(P, 'lineW', 0.5, 6, 0.1).name('線の太さ');
 gp.add(P, 'boil', 0, 3, 0.05).name('手描きの揺れ');
+gp.add(P, 'outline').name('雲のふちをなぞる');
+gp.add(P, 'outlineW', 0.3, 3, 0.05).name('ふちの線の太さ');
 const gd = gui.addFolder('検出');
 gd.add(P, 'thrBias', -0.3, 0.3, 0.005).name('雲のしきい値');
 gd.add(P, 'minR', 0.01, 0.2, 0.005).name('最小の雲');
