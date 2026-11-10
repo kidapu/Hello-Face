@@ -63,6 +63,7 @@ const P = {
   edgeGrow: 4,          // push the outlines outward (screen px): smoothing and the blur pull them inside the objects
   edgeBig: 0.07,        // regions over 7% of the picture count as background (their lines move into them)
   camRes: 720, fit: 'contain',
+  temporal: true, hold: 3, sure: 0.9,   // steadier labels on video (SegNet.smoother)
 };
 const GCOL = [[90, 150, 240], [255, 255, 255], [160, 110, 60], [60, 170, 60], [130, 130, 140], [230, 60, 60], [170, 90, 200]];
 const GJA = ['空', '雲', '地面', '植物', '建物', '人', 'その他'];
@@ -92,8 +93,9 @@ async function begin() {
 
 // ---------------- the model
 let loadMsg = '';
+const smooth = SegNet.smoother();
 async function loadModel() {
-  SegNet.reset(); seg = null; stat = null; runs = 0; gap = 0;
+  SegNet.reset(); smooth.reset(); seg = null; stat = null; runs = 0; gap = 0;
   try { await SegNet.load((t) => (loadMsg = t), { worker: P.worker, device: P.device, precision: P.precision, up: P.up }); loadMsg = ''; }
   catch (e) { loadMsg = 'モデルを読み込めませんでした: ' + (e.message || e); $('loading').querySelector('.spin').hidden = true; }
 }
@@ -105,7 +107,8 @@ async function loop() {
     const stillPhoto = mode === 'photo' && segSrc === img && seg && seg.w === SegNet.inputSize(sw, sh, P.size)[0];
     if (!P.paused && SegNet.ready && sw && !stillPhoto) {
       try {
-        const r = await SegNet.run(source(), 0, 0, P.size);
+        let r = await SegNet.run(source(), 0, 0, P.size);
+        if (P.temporal && mode === 'cam') r = smooth.apply(r, { hold: P.hold, sure: P.sure });
         seg = r; segSrc = img; runs++;
         const st = { infer: r.ms, prep: r.prep, post: r.post, total: performance.now() - t0 };
         stat = stat ? Object.fromEntries(Object.entries(st).map(([k, v]) => [k, stat[k] * 0.85 + v * 0.15])) : st;
@@ -214,6 +217,10 @@ gm.add(P, 'device', ['auto', 'webgpu', 'wasm']).name('実行 (GPU / CPU)').onCha
 gm.add(P, 'precision', ['auto', 'fp16', 'fp32']).name('精度 (fp16 / fp32)').onChange(reload);
 gm.add(P, 'worker').name('別スレッドで実行').onChange(reload);
 gm.add(P, 'paused').name('一時停止');
+const gt = gui.addFolder('ちらつきを抑える（動画）');
+gt.add(P, 'temporal').name('前の結果を引き継ぐ').onChange(() => smooth.reset());
+gt.add(P, 'hold', 1, 15, 1).name('何回続いたら切り替えるか');
+gt.add(P, 'sure', 0.5, 1, 0.01).name('すぐ切り替える自信の度合い');
 const gv = gui.addFolder('表示');
 gv.add(P, 'color', { '大分類 (空・雲・地面…)': 'group', '171 種類すべて': 'class', '自信の度合い': 'confidence' }).name('色分け').onChange(() => (view = null));
 gv.add(P, 'outline').name('枠線を描く').onChange(() => (view = null));

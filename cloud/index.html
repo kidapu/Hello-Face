@@ -93,6 +93,7 @@ const P = {
   aiLineW: 2.5, aiEdgeBlur: 3, aiEdgeSmooth: 4, aiEdgeMin: 0.005, aiEdgeGrow: 4, aiEdgeBig: 0.07, aiLabels: true, aiLabelMin: 0.015,
   aiFaceSrc: 'ai',    // AI mode: what the faces go on: 'ai' = the AI's regions alone, 'mix' = the colour detection inside the AI's sky
   aiPen: false,       // AI mode: also trace the shapes the faces went on with the black pen
+  aiTemporal: true, aiHold: 3, aiSure: 0.9,   // AI mode: steadier labels on video (SegNet.smoother)
   aiStats: true,      // AI mode: show the frame rate at the top
   aiEvery: 0,         // AI mode: at least this many ms between two AI runs (the camera keeps running)
   aiGround: true,     // AI mode: no faces on the ground (grass, sand, road, water, ... as the AI sees it)
@@ -329,10 +330,11 @@ requestAnimationFrame(frame);
 // colour detection, but only inside the sky the AI sees; the ground gets no faces; every other thing (tree,
 // building, person, ...) gets the animal its shape looks like. The model (~6 MB) is only downloaded on the
 // first press, then cached by the browser.
+const aiSmooth = SegNet.smoother();
 const ai = { active: false, busy: false, parts: [], view: null, ctx: null, runs: 0, ms: 0 };
 function aiOff() {
   if (!ai.active) return;
-  ai.active = false; ai.ctx = null; ai.parts = []; ai.view = null; $('ai').classList.remove('on');
+  ai.active = false; ai.ctx = null; ai.parts = []; ai.view = null; aiSmooth.reset(); $('ai').classList.remove('on');
   lastDet = 0;
 }
 const JA = { 'sky-other': '空', clouds: '雲', person: '人', tree: '木', bush: '茂み', 'building-other': '建物', house: '家', skyscraper: 'ビル',
@@ -375,7 +377,8 @@ async function aiLoop() {
         const k = Math.min(1, P.aiSize / Math.max(sw, sh)), c = ai.grab || (ai.grab = document.createElement('canvas'));
         c.width = Math.round(sw * k); c.height = Math.round(sh * k);
         c.getContext('2d').drawImage(source(), 0, 0, c.width, c.height);
-        const W = det.w, H = det.h, tr = performance.now(), segN = await SegNet.run(c, 0, 0, P.aiSize), seg = resampleSeg(segN, W, H);
+        const W = det.w, H = det.h, tr = performance.now(), segN0 = await SegNet.run(c, 0, 0, P.aiSize),
+          segN = P.aiTemporal && mode === 'cam' ? aiSmooth.apply(segN0, { hold: P.aiHold, sure: P.aiSure }) : segN0, seg = resampleSeg(segN, W, H);
         ai.segN = segN; ai.view = null;
         if (!ai.active) break;
         const tp = performance.now(); aiPrep(seg, W, H); lastImg = img; ai.runs++; ai.ms = seg.ms;
@@ -573,6 +576,9 @@ gd.add(P, 'aiEdgeSmooth', 0, 5, 1).name('AI: 枠線の角の丸め').onChange(()
 gd.add(P, 'aiEdgeGrow', -10, 20, 0.5).name('AI: 枠線を外に広げる (px)');
 gd.add(P, 'aiLabels').name('AI: 名前を表示');
 gd.add(P, 'aiStats').name('AI: FPS を表示');
+gd.add(P, 'aiTemporal').name('AI: ちらつきを抑える').onChange(() => aiSmooth.reset());
+gd.add(P, 'aiHold', 1, 15, 1).name('AI: 何回続いたら切り替えるか');
+gd.add(P, 'aiSure', 0.5, 1, 0.01).name('AI: すぐ切り替える自信の度合い');
 gd.add(P, 'aiFaceSrc', { 'AI だけ': 'ai', '色の検出と組み合わせ': 'mix' }).name('AI: 顔を付ける形');
 gd.add(P, 'aiPen').name('AI: 顔を付けた形を黒い線で描く');
 gd.add(P, 'aiGround').name('AI: 地面には顔を付けない');
