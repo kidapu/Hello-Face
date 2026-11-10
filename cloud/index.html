@@ -91,6 +91,12 @@ const P = {
   aiGround: true,     // AI mode: no faces on the ground (grass, sand, road, water, ... as the AI sees it)
   outline: true, outlineW: 1.0,   // trace the clouds' edges with the pen
 };
+// what was tuned on debug.html in this browser (only the changes): the face style, the shape rules and, per
+// animal, the face adjustments (Doodle.draw's o.perKind)
+let DBG = null;
+try { DBG = JSON.parse(localStorage.getItem('cloudDebug') || 'null'); } catch (e) { DBG = null; }
+if (DBG) Object.assign(P, DBG.face || {}, DBG.rule || {}, DBG.other || {});
+const PERKIND = (DBG && DBG.kind) || null;
 const { KINDS, EXPRS, mulberry } = Doodle;
 const $ = (id) => document.getElementById(id);
 const cv = $('c'), ctx = cv.getContext('2d'), video = $('v');
@@ -129,7 +135,7 @@ function usePhoto(file) {
   };
   im.src = URL.createObjectURL(file);
 }
-function showApp() { $('start').style.display = 'none'; $('bar').style.display = 'flex'; resize(); }
+function showApp() { $('start').style.display = 'none'; $('bar').style.display = 'flex'; resize(); if (DBG && Object.keys(DBG).length && !showApp.told) { showApp.told = true; say('デバッグページで変えた設定を使っています', 3000); } }
 const source = () => mode === 'cam' ? video : img;
 const srcSize = () => mode === 'cam' ? [video.videoWidth, video.videoHeight] : img ? [img.width, img.height] : [0, 0];
 
@@ -206,7 +212,7 @@ function updateTracks(found, dt) {
 let boilFrame = 0;
 const style = () => ({ ink: P.ink, lineW: P.lineW, boil: P.boil, boilFrame, eyeSize: P.eyeSize, eyeGap: P.eyeGap,
   earSize: P.earSize, ears: P.ears, whiskers: P.whiskers, paws: P.paws, blush: P.blush,
-  dpr: Math.min(2, window.devicePixelRatio || 1), gaze: P.gaze, blink: P.blink, snakeBody: P.snakeBody });
+  dpr: Math.min(2, window.devicePixelRatio || 1), gaze: P.gaze, blink: P.blink, snakeBody: P.snakeBody, perKind: PERKIND });
 function drawTrack(t, time, o) {
   const [x, y] = toScr(t.x, t.y + Math.sin(time * 0.9 + t.ph) * t.r * 0.01);
   const U = t.r * det.w * P.faceScale * view.k * (1 + 0.012 * Math.sin(time * 1.4 + t.ph));

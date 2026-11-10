@@ -53,7 +53,7 @@
 
 <!-- ① faces -->
 <section id="faces" class="on">
-  <p class="hint">それぞれの顔に <span class="mono">ID</span> が付いています（例 <span class="mono">cat/smile</span>）。「<span class="mono">bear/happy</span> の目をもう少し大きく」のように ID で指示してもらえると、どの顔の話かがはっきりします。下のつまみは全部の顔に効く共通の設定で、動かすとすぐ描き直します（カメラ本体の設定は変わりません）。</p>
+  <p class="hint">それぞれの顔に <span class="mono">ID</span> が付いています（例 <span class="mono">cat/smile</span>）。「<span class="mono">bear/happy</span> の目をもう少し大きく」のように ID で指示してもらえると、どの顔の話かがはっきりします。すぐ下のつまみは<b>全部の動物に共通</b>の設定です。動物ごとのカードにある「○○だけの調整」を開くと、<b>その動物だけ</b>を変えられます。ここで変えた設定は、同じブラウザで開いたカメラにも反映されます。</p>
   <div class="card"><div class="ctl" id="faceCtl"></div></div>
   <div id="faceRows"></div>
 </section>
@@ -120,11 +120,27 @@ const FACE_UI = [
 ];
 const RULE0 = {}; for (const r of CloudFind.RULES) for (const c of r.conds) if (c.p) RULE0[c.p] = c.d;
 const OTHER0 = { holeMin: 0.008, holeMax: 0.06, peekMin: 0.9, whaleCover: 0.45 };
-const S = { face: { ...FACE0 }, rule: { ...RULE0 }, other: { ...OTHER0 } };
-try { const sv = JSON.parse(localStorage.getItem('cloudDebug') || '{}'); for (const k of ['face', 'rule', 'other']) Object.assign(S[k], sv[k] || {}); } catch (e) { /* none */ }
-const save = () => { localStorage.setItem('cloudDebug', JSON.stringify(S)); writeDiff(); };
+// per animal: numbers multiply the shared setting (1 = as shared), switches: null = as shared, true / false
+const KIND_UI = [['size', '顔の大きさ', 0.5, 1.8, 0.01], ['eyeSize', '目の大きさ', 0.4, 2, 0.01], ['eyeGap', '目の間隔', 0.5, 1.6, 0.01],
+  ['earSize', '耳の大きさ', 0.3, 2.5, 0.01], ['blush', 'ほっぺの濃さ', 0, 3, 0.05], ['lineW', '線の太さ', 0.4, 2, 0.01]];
+const KIND_SW = [['ears', '耳'], ['whiskers', 'ヒゲ'], ['paws', '手足']];
+const KIND0 = { size: 1, eyeSize: 1, eyeGap: 1, earSize: 1, blush: 1, lineW: 1, ears: null, whiskers: null, paws: null };
+const S = { face: { ...FACE0 }, rule: { ...RULE0 }, other: { ...OTHER0 }, kind: Object.fromEntries(KINDS.map((k) => [k, { ...KIND0 }])) };
+try {
+  const sv = JSON.parse(localStorage.getItem('cloudDebug') || '{}');
+  for (const k of ['face', 'rule', 'other']) Object.assign(S[k], sv[k] || {});
+  for (const [k, v] of Object.entries(sv.kind || {})) if (S.kind[k]) Object.assign(S.kind[k], v);
+} catch (e) { /* none */ }
+// the per-animal settings that differ from "as shared" (what Doodle.draw takes as o.perKind)
+const perKind = () => {
+  const out = {};
+  for (const [k, v] of Object.entries(S.kind)) for (const [q, x] of Object.entries(v)) if (x !== KIND0[q]) (out[k] ||= {})[q] = x;
+  return out;
+};
+// only the changes are kept (so later changes to the defaults still reach the camera); cloud_cam.html reads them too
+const save = () => { localStorage.setItem('cloudDebug', JSON.stringify(diffObj())); writeDiff(); };
 const style = () => ({ ink: '#1c2340', lineW: S.face.lineW, boil: S.face.boil, boilFrame: 0, eyeSize: S.face.eyeSize, eyeGap: S.face.eyeGap,
-  earSize: S.face.earSize, ears: S.face.ears, whiskers: S.face.whiskers, paws: S.face.paws, blush: S.face.blush, dpr: 1, gaze: false, blink: false, snakeBody: S.face.snakeBody });
+  earSize: S.face.earSize, ears: S.face.ears, whiskers: S.face.whiskers, paws: S.face.paws, blush: S.face.blush, dpr: 1, gaze: false, blink: false, snakeBody: S.face.snakeBody, perKind: perKind() });
 const opts = () => ({ ...DET, ...S.rule, ...S.other });
 
 // ---------------- tabs
@@ -188,8 +204,10 @@ function drawTile(cv, kind, expr, seed) {
   if (t.body) { const [u0, u1, v] = t.body; d.body = []; for (let u = u0; u <= u1; u += 0.02) { const hh = Math.max(0, ...t.cloud.map(([x, y, r]) => r * r > (u - x) ** 2 ? Math.sqrt(r * r - (u - x) ** 2) : 0)); d.body.push({ x: u * T, y: v * T, half: Math.max(2, hh * T) }); } }
   Doodle.draw(ctx, d, O);
 }
+const TILEV = [];   // every tile canvas: { cv, kind, ex, seed }
+function redrawFaces(kind) { for (const t of TILEV) if (!kind || t.kind === kind) drawTile(t.cv, t.kind, t.ex, t.seed); }
 function buildFaces() {
-  const box = document.getElementById('faceRows'); box.innerHTML = '';
+  const box = document.getElementById('faceRows'); box.innerHTML = ''; TILEV.length = 0;
   KINDS.forEach((kind, ki) => {
     const rule = CloudFind.RULES.find((r) => r.kind === kind);
     const card = document.createElement('div'); card.className = 'card';
@@ -197,15 +215,34 @@ function buildFaces() {
     const row = document.createElement('div'); row.className = 'row';
     EXPRS.forEach((ex) => {
       const tl = document.createElement('div'); tl.className = 'tile';
-      const cv = document.createElement('canvas'); drawTile(cv, kind, ex, 40 + ki * 97);
+      const cv = document.createElement('canvas'), seed = 40 + ki * 97; drawTile(cv, kind, ex, seed); TILEV.push({ cv, kind, ex, seed });
       tl.append(cv); tl.insertAdjacentHTML('beforeend', `<div>${EXJA[ex]}</div><div class="id">${kind}/${ex}</div>`); row.append(tl);
     });
-    card.append(row); box.append(card);
+    // this animal's own settings
+    const det2 = document.createElement('details'); det2.style.marginTop = '8px';
+    const changed = () => Object.entries(S.kind[kind]).some(([q, x]) => x !== KIND0[q]);
+    const sum = document.createElement('summary'); const setSum = () => { sum.innerHTML = `<b>${JA[kind]}だけの調整</b> <span class="hint">（共通の設定に掛け算。1 = 共通のまま）${changed() ? ' — <span class="changed">変更あり</span>' : ''}</span>`; };
+    setSum(); det2.append(sum); if (changed()) det2.open = true;
+    const ctl = document.createElement('div'); ctl.className = 'ctl'; ctl.style.marginTop = '6px';
+    const on = () => { setSum(); redrawFaces(kind); if (img) drawPhoto(); };
+    for (const [q, label, a, b, st] of KIND_UI) control(ctl, S.kind[kind], q, label, a, b, st, 1, '× 共通の設定', on);
+    for (const [q, label] of KIND_SW) {
+      const l = document.createElement('label'); l.textContent = label;
+      const se = document.createElement('select'); se.innerHTML = '<option value="">共通のまま</option><option value="1">あり</option><option value="0">なし</option>';
+      se.value = S.kind[kind][q] == null ? '' : S.kind[kind][q] ? '1' : '0';
+      const mark = () => l.classList.toggle('changed', S.kind[kind][q] != null);
+      se.onchange = () => { S.kind[kind][q] = se.value === '' ? null : se.value === '1'; mark(); save(); on(); };
+      mark(); ctl.append(l, se, document.createElement('span'), document.createElement('span'));
+    }
+    const rs = document.createElement('button'); rs.textContent = `${JA[kind]}の調整を元に戻す`; rs.style.marginTop = '6px';
+    rs.onclick = () => { S.kind[kind] = { ...KIND0 }; save(); buildFaces(); if (img) drawPhoto(); };
+    det2.append(ctl, rs);
+    card.append(row, det2); box.append(card);
   });
 }
 {
   const box = document.getElementById('faceCtl');
-  for (const [k, label, a, b, st] of FACE_UI) control(box, S.face, k, label, a, b, st, FACE0[k], '', () => { buildFaces(); if (img) drawPhoto(); });
+  for (const [k, label, a, b, st] of FACE_UI) control(box, S.face, k, label, a, b, st, FACE0[k], '', () => { redrawFaces(); if (img) drawPhoto(); });
 }
 
 // ---------------- ② the rules
@@ -326,11 +363,16 @@ function listFaces() {
 }
 
 // ---------------- ④ export
-function writeDiff() {
+function diffObj() {
   const out = {};
   for (const [k, v] of Object.entries(S.face)) if (v !== FACE0[k]) (out.face ||= {})[k] = v;
   for (const [k, v] of Object.entries(S.rule)) if (v !== RULE0[k]) (out.rule ||= {})[k] = v;
   for (const [k, v] of Object.entries(S.other)) if (v !== OTHER0[k]) (out.other ||= {})[k] = v;
+  const pk = perKind(); if (Object.keys(pk).length) out.kind = pk;
+  return out;
+}
+function writeDiff() {
+  const out = diffObj();
   document.getElementById('diffOut').value = Object.keys(out).length ? 'デバッグページで変えた設定:\n' + JSON.stringify(out, null, 1) : '（初期値から変えた設定はありません）';
 }
 document.getElementById('copyBtn').onclick = () => navigator.clipboard.writeText(document.getElementById('diffOut').value);
