@@ -91,7 +91,9 @@ const P = {
   aiUp: 2,            // AI mode: its output resolution: 1 = 1/8 of the input (blocky), 2 = 1/4, 4 = 1/2, 8 = 1/1
   // AI mode, the view of what it saw (as seg.html): coloured outlines per class, smoothed, pushed outward
   aiLineW: 2.5, aiEdgeBlur: 3, aiEdgeSmooth: 4, aiEdgeMin: 0.005, aiEdgeGrow: 4, aiEdgeBig: 0.07, aiLabels: true, aiLabelMin: 0.015,
-  aiStats: true,      // AI mode: show how long each step of a recognition takes
+  aiFaceSrc: 'ai',    // AI mode: what the faces go on: 'ai' = the AI's regions alone, 'mix' = the colour detection inside the AI's sky
+  aiPen: false,       // AI mode: also trace the shapes the faces went on with the black pen
+  aiStats: true,      // AI mode: show the frame rate at the top
   aiEvery: 0,         // AI mode: at least this many ms between two AI runs (the camera keeps running)
   aiGround: true,     // AI mode: no faces on the ground (grass, sand, road, water, ... as the AI sees it)
   outline: true, outlineW: 1.0,   // trace the clouds' edges with the pen
@@ -258,14 +260,14 @@ function drawParts() {
   SegDraw.draw(ctx, ai.view, { ox: view.ox, oy: view.oy, kx: sw * view.s / sg.W, ky: sh * view.s / sg.H },
     { dpr: Math.min(2, window.devicePixelRatio || 1), grow: P.aiEdgeGrow, lineW: P.aiLineW, labels: P.aiLabels });
 }
+// the frame rate, at the top (with the AI on)
+let fpsN = 0, fpsT = 0, fps = 0;
 function drawAiStats() {
-  const q = ai.stat, f = (v) => v.toFixed(1), dpr = Math.min(2, window.devicePixelRatio || 1), fs = Math.round(11 * dpr);
-  const lines = [`AI ${SegNet.device === 'webgpu' ? 'GPU' : 'CPU'}${SegNet.worker ? '・別スレッド' : ''} ${q.size}  1回 ${f(q.total)} ms / ${ai.gap ? (1000 / ai.gap).toFixed(1) : '-'} 回/秒`,
-    `取り込み ${f(q.grab)}  前処理 ${f(q.prep)}  推論 ${f(q.infer)}  後処理 ${f(q.post)}  顔 ${f(q.faces)}`];
+  const dpr = Math.min(2, window.devicePixelRatio || 1), fs = Math.round(12 * dpr), t = `${fps.toFixed(0)} fps`;
   ctx.save(); ctx.font = `${fs}px ui-monospace, Consolas, monospace`; ctx.textBaseline = 'top';
-  const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + fs, y0 = fs * 4.2;
-  ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(fs * 0.6, y0, w, fs * 2.9);
-  ctx.fillStyle = '#fff'; lines.forEach((l, i) => ctx.fillText(l, fs * 1.1, y0 + fs * 0.4 + i * fs * 1.3));
+  const w = ctx.measureText(t).width + fs, y0 = fs * 4.2;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(fs * 0.6, y0, w, fs * 1.6);
+  ctx.fillStyle = '#fff'; ctx.fillText(t, fs * 1.1, y0 + fs * 0.3);
   ctx.restore();
 }
 function hsl(h, s, l) {
@@ -287,6 +289,7 @@ function drawMask() {
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  fpsN++; if (now - fpsT > 500) { fps = fpsN * 1000 / (now - fpsT); fpsN = 0; fpsT = now; }
   const [sw, sh] = srcSize();
   ctx.fillStyle = '#0d1220'; ctx.fillRect(0, 0, cv.width, cv.height);
   if (mode && sw && sh) {
@@ -304,8 +307,8 @@ function frame(now) {
       if (ai.active && P.aiShow && ai.segN) drawParts();
       boilFrame = P.boil > 0 ? Math.floor(now / 1000 * P.boilFps) : 0;
       const o = style(), time = now / 1000;
-      if (P.outline) drawOutlines(o);   // with the AI on: the clouds and things it kept
-      if (ai.active && P.aiStats && ai.stat) drawAiStats();
+      if (P.outline && (!ai.active || P.aiPen)) drawOutlines(o);   // with the AI on: the clouds and things it kept (off by default)
+      if (ai.active && P.aiStats) drawAiStats();
       for (const t of tracks) {
         const target = t.hits >= 3 && t.miss < 0.3 ? 1 : t.miss >= 0.3 ? 0 : t.alpha;
         t.alpha += (target - t.alpha) * Math.min(1, dt * 5);
@@ -427,13 +430,18 @@ function aiPrep(seg, W, H) {
 // clouds when the colours find almost nothing: overcast, dusk), minus the haze along the skyline; plus the things
 function aiFaces() {
   const C = ai.ctx, W = C.W, H = C.H, n = W * H, Gs = SegNet.G, grp = C.grp, sky0 = C.sky0;
-  const cm = new Uint8Array(n); let nc = 0, nai = 0;
-  for (let i = 0; i < n; i++) { if (det.mask[i] && C.sky[i]) { cm[i] = 1; nc++; } if (grp[i] === Gs.CLOUDS) nai++; }
-  if (nc < nai * 0.3) for (let i = 0; i < n; i++) if (grp[i] === Gs.CLOUDS) cm[i] = 1;
+  const cm = new Uint8Array(n);
+  if (P.aiFaceSrc === 'ai') {   // the AI alone: its "clouds" are the clouds
+    for (let i = 0; i < n; i++) cm[i] = grp[i] === Gs.CLOUDS ? 1 : 0;
+  } else {                      // with the colour detection (below)
+    let nc = 0, nai = 0;
+    for (let i = 0; i < n; i++) { if (det.mask[i] && C.sky[i]) { cm[i] = 1; nc++; } if (grp[i] === Gs.CLOUDS) nai++; }
+    if (nc < nai * 0.3) for (let i = 0; i < n; i++) if (grp[i] === Gs.CLOUDS) cm[i] = 1;
+  }
   // a "cloud" lying along the tops of trees / buildings that the AI calls sky is the haze over the skyline:
   // dropped (a part whose edge touches the non-sky for > 25%, with < half of it AI clouds)
   let cd = CloudFind.fromMask(cm, W, H);
-  {
+  if (P.aiFaceSrc !== 'ai') {
     const nc0 = cd.comps.length, edge = new Int32Array(nc0), touch = new Int32Array(nc0), aic = new Int32Array(nc0), ar = new Int32Array(nc0);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = y * W + x, id = cd.label[i]; if (id < 0) continue;
@@ -564,7 +572,9 @@ gd.add(P, 'aiEdgeBlur', 0, 4, 1).name('AI: 枠線のなめらかさ').onChange((
 gd.add(P, 'aiEdgeSmooth', 0, 5, 1).name('AI: 枠線の角の丸め').onChange(() => (ai.view = null));
 gd.add(P, 'aiEdgeGrow', -10, 20, 0.5).name('AI: 枠線を外に広げる (px)');
 gd.add(P, 'aiLabels').name('AI: 名前を表示');
-gd.add(P, 'aiStats').name('AI: 処理時間を表示');
+gd.add(P, 'aiStats').name('AI: FPS を表示');
+gd.add(P, 'aiFaceSrc', { 'AI だけ': 'ai', '色の検出と組み合わせ': 'mix' }).name('AI: 顔を付ける形');
+gd.add(P, 'aiPen').name('AI: 顔を付けた形を黒い線で描く');
 gd.add(P, 'aiGround').name('AI: 地面には顔を付けない');
 gc.close(); gp.close(); gd.close();
 </script>
