@@ -94,7 +94,8 @@ const P = {
   aiSize: 448,        // AI mode: the long side of the picture the AI sees (smaller = faster, coarser)
   aiUp: 4,            // AI mode: its output resolution: 1 = 1/8 of the input (blocky), 2 = 1/4, 4 = 1/2, 8 = 1/1
   // AI mode, the view of what it saw (as seg.html): coloured outlines per class, smoothed, pushed outward
-  aiLineW: 2.5, aiEdgeBlur: 3, aiEdgeSmooth: 4, aiEdgeMin: 0.005, aiEdgeGrow: 4, aiEdgeBig: 0.07, aiLabels: true, aiLabelMin: 0.015,
+  aiLineW: 2.5, aiEdgeBlur: 3, aiEdgeSmooth: 4, aiEdgeMin: 0.005, aiEdgeGrow: 4, aiEdgeBig: 0.07, aiLabels: false, aiLabelMin: 0.015,
+  aiLineCol: '#1c2340',   // AI mode: every outline in this colour (the faces' ink); '' = each class its own colour
   aiFaceSrc: 'ai',    // AI mode: what the faces go on: 'ai' = the AI's regions alone, 'mix' = the colour detection inside the AI's sky
   aiPen: false,       // AI mode: also trace the shapes the faces went on with the black pen
   aiTemporal: true, aiHold: 3, aiSure: 0.9,   // AI mode: steadier labels on video (SegNet.smoother)
@@ -269,7 +270,7 @@ function drawParts() {
     labels: P.aiLabels, labelMin: P.aiLabelMin, nameOf: (k) => JA[sg.names[k]] || sg.names[k] });
   const [sw, sh] = srcSize();
   SegDraw.draw(ctx, ai.view, { ox: view.ox, oy: view.oy, kx: sw * view.s / sg.W, ky: sh * view.s / sg.H },
-    { dpr: Math.min(2, window.devicePixelRatio || 1), grow: P.aiEdgeGrow, lineW: P.aiLineW, labels: P.aiLabels });
+    { dpr: Math.min(2, window.devicePixelRatio || 1), grow: P.aiEdgeGrow, lineW: P.aiLineW, labels: P.aiLabels, color: P.aiLineCol });
 }
 // the frame rate, at the top (with the AI on)
 let fpsN = 0, fpsT = 0, fps = 0;
@@ -584,7 +585,8 @@ gd.add(P, 'aiLineW', 0.5, 8, 0.5).name('AI: 枠線の太さ');
 gd.add(P, 'aiEdgeBlur', 0, 4, 1).name('AI: 枠線のなめらかさ').onChange(() => (ai.view = null));
 gd.add(P, 'aiEdgeSmooth', 0, 5, 1).name('AI: 枠線の角の丸め').onChange(() => (ai.view = null));
 gd.add(P, 'aiEdgeGrow', -10, 20, 0.5).name('AI: 枠線を外に広げる (px)');
-gd.add(P, 'aiLabels').name('AI: 名前を表示');
+gd.add(P, 'aiLabels').name('AI: 名前を表示').onChange(() => (ai.view = null));
+gd.add(P, 'aiLineCol', { '黒（顔と同じ線の色）': '#1c2340', '種類ごとの色': '' }).name('AI: 枠線の色');
 gd.add(P, 'kindBy', { 'ルール': 'rule', '学習（形を見て判定）': 'learn' }).name('動物の決め方').onChange(loadShapeNet);
 gd.add(P, 'learnContext').name('学習: 大きい雲はクジラ・群れはヒツジを先に');
 gd.add(P, 'aiStats').name('AI: FPS を表示');

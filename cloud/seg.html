@@ -56,7 +56,8 @@ const P = {
   up: 4,                // output resolution: 1 = 1/8 of the input (blocky), 2 = 1/4, 4 = 1/2, 8 = 1/1 (smooth edges)
   // the view
   color: 'class',       // 'group' (sky / clouds / ground / ...) | 'class' (all 171) | 'confidence'
-  opacity: 0.55, smooth: false, labels: true, labelMin: 0.015, dimLowConf: 0, paused: false,
+  opacity: 0.55, smooth: false, labels: true, labelMin: 0.015, lang: 'kana',   // lang: the names in hiragana (for children) or 'en'
+  dimLowConf: 0, paused: false,
   fill: false,          // paint the regions
   outline: true,        // trace each region's edge in its colour (a smoothed polyline)
   lineW: 2.5, edgeBlur: 3, edgeSmooth: 4, edgeMin: 0.005,
@@ -143,7 +144,7 @@ function buildView() {
   g.putImageData(id, 0, 0);
   // the outlines and the names (segdraw.js, shared with the camera's AI view)
   const sd = P.color === 'confidence' ? { lines: [], labels: [] } : SegDraw.build(seg, { by: P.color === 'group' ? 'group' : 'class', blur: P.edgeBlur, smooth: P.edgeSmooth,
-    lines: P.outline, min: P.edgeMin, big: P.edgeBig, labels: P.labels, labelMin: P.labelMin, nameOf: P.color === 'group' ? (k) => GJA[k] : null });
+    lines: P.outline, min: P.edgeMin, big: P.edgeBig, labels: P.labels, labelMin: P.labelMin, nameOf: P.color === 'group' ? (k) => (P.lang === 'kana' ? SegDraw.GKANA : GJA)[k] : P.lang === 'kana' ? (k) => SegDraw.KANA[seg.names[k]] || seg.names[k] : null });
   const lines = sd.lines;
   const n = W * H, cls = [...area.keys()].filter((k) => area[k] > 0).sort((a, b) => area[b] - area[a]);
   view = { c, lines, labels: sd.labels, cls: cls.map((k) => ({ k, name: seg.names[k], g: SegNet.groupOf ? SegNet.groupOf[k] : 6, pct: area[k] / n, x: sx[k] / area[k], y: sy[k] / area[k] })) };
@@ -204,7 +205,7 @@ $('rec').onclick = () => {
   rec.start(500);
   $('rec').classList.add('on'); $('rec').textContent = '■'; say('録画中… もう一度押すと止まります');
 };
-if (document.fonts) document.fonts.load('800 16px "M PLUS Rounded 1c"').catch(() => {});
+if (document.fonts) document.fonts.load('800 16px "M PLUS Rounded 1c"', [...new Set(Object.values(SegDraw.KANA).join('') + SegDraw.GKANA.join('') + GJA.join(''))].join('')).catch(() => {});
 
 // ---------------- knobs
 const gui = new lil.GUI({ title: 'セグメンテーション' });
@@ -233,7 +234,8 @@ gv.add(P, 'edgeGrow', -10, 20, 0.5).name('枠線を外に広げる (px)');
 gv.add(P, 'edgeBig', 0.02, 0.6, 0.01).name('背景とみなす面積 (広げる向き)').onChange(() => (view = null));
 gv.add(P, 'opacity', 0, 1, 0.05).name('塗りの濃さ').onChange(() => (view = null));
 gv.add(P, 'smooth').name('なめらかに拡大');
-gv.add(P, 'labels').name('名前を表示');
+gv.add(P, 'labels').name('名前を表示').onChange(() => (view = null));
+gv.add(P, 'lang', { 'ひらがな': 'kana', '英語': 'en' }).name('名前のことば').onChange(() => (view = null));
 gv.add(P, 'labelMin', 0, 0.2, 0.005).name('名前を出す最小の面積');
 gv.add(P, 'dimLowConf', 0, 1, 0.05).name('自信がない所を薄く (しきい値)').onChange(() => (view = null));
 gv.add(P, 'fit', ['contain', 'cover']).name('画面の合わせ方');
