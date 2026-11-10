@@ -53,7 +53,7 @@ const P = {
   size: 448,            // long side of the picture the model sees (multiples of 32)
   every: 0,             // ms between runs (0 = back to back)
   device: 'auto', precision: 'auto', worker: true,
-  up: 2,                // output resolution: 1 = 1/8 of the input (blocky), 2 = 1/4, 4 = 1/2, 8 = 1/1 (smooth edges)
+  up: 4,                // output resolution: 1 = 1/8 of the input (blocky), 2 = 1/4, 4 = 1/2, 8 = 1/1 (smooth edges)
   // the view
   color: 'class',       // 'group' (sky / clouds / ground / ...) | 'class' (all 171) | 'confidence'
   opacity: 0.55, smooth: false, labels: true, labelMin: 0.015, dimLowConf: 0, paused: false,

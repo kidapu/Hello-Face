@@ -29,6 +29,10 @@
   input[type=range] { width: 160px; vertical-align: middle; }
   .num { font: 12px ui-monospace, Consolas, monospace; display: inline-block; min-width: 46px; }
   .changed { background: #ffe3a3 !important; }
+  .pbar { display: grid; grid-template-columns: 5em 1fr 3.5em; gap: 2px 6px; align-items: center; font-size: 13px; max-width: 420px; }
+  .pbar i { display: block; height: 10px; border-radius: 5px; background: #8fb0e0; }
+  .pbar .top i { background: #f0a500; }
+  .facecard canvas.sil { float: right; width: 64px; height: 64px; image-rendering: pixelated; border: 1px solid #ccd; margin-left: 8px; }
   .kindbadge { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #dfe8f6; font-weight: 700; }
   #photoWrap { position: sticky; top: 56px; flex: 0 1 520px; max-width: 100%; }
   #photoCv { width: 100%; height: auto; border-radius: 10px; cursor: pointer; display: block; }
@@ -61,6 +65,7 @@
 <!-- ② rules -->
 <section id="rules">
   <p class="hint">雲 1 つごとに、形の特徴（細長さ・大きさ・曲がりなど）を測り、<b>上から順に</b>ルールを確かめます。<b>条件が全部合った最初のルール</b>の動物になります。しきい値のつまみを動かすと、③ の写真の結果にもすぐ反映されます。</p>
+  <div class="card" id="learnCard"></div>
   <div id="ruleList"></div>
   <h2>形の特徴（測っているもの）</h2>
   <div class="card"><table id="featTable"></table></div>
@@ -103,6 +108,7 @@
 
 <script src="../lib/doodle.js"></script>
 <script src="../lib/cloudfind.js"></script>
+<script src="../lib/shapenet.js"></script>
 <script>
 // Debug page: the faces (every animal x every expression, with IDs), the shape -> animal rules (CloudFind.RULES,
 // thresholds tunable) and a photo view showing, for every face, the measured features and each rule's checks.
@@ -119,16 +125,18 @@ const FACE_UI = [
   ['ears', '耳'], ['whiskers', 'ヒゲ'], ['paws', '手足'], ['snakeBody', 'ヘビの体の線'],
 ];
 const RULE0 = {}; for (const r of CloudFind.RULES) for (const c of r.conds) if (c.p) RULE0[c.p] = c.d;
-const OTHER0 = { holeMin: 0.008, holeMax: 0.06, peekMin: 0.9, whaleCover: 0.45 };
+const OTHER0 = { holeMin: 0.008, holeMax: 0.06, peekMin: 0.9, whaleCover: 0.45, kindBy: 'rule', learnContext: true, learnMin: 0.3 };
+const LEARN_KINDS = ['cat', 'bear', 'snake', 'fish', 'dolphin', 'bird', 'bat', 'sheep', 'whale'];
+const LEARN0 = Object.fromEntries(LEARN_KINDS.map((k) => [k, 1]));
 // per animal: numbers multiply the shared setting (1 = as shared), switches: null = as shared, true / false
 const KIND_UI = [['size', '顔の大きさ', 0.5, 1.8, 0.01], ['eyeSize', '目の大きさ', 0.4, 2, 0.01], ['eyeGap', '目の間隔', 0.5, 1.6, 0.01],
   ['earSize', '耳の大きさ', 0.3, 2.5, 0.01], ['blush', 'ほっぺの濃さ', 0, 3, 0.05], ['lineW', '線の太さ', 0.4, 2, 0.01]];
 const KIND_SW = [['ears', '耳'], ['whiskers', 'ヒゲ'], ['paws', '手足']];
 const KIND0 = { size: 1, eyeSize: 1, eyeGap: 1, earSize: 1, blush: 1, lineW: 1, ears: null, whiskers: null, paws: null };
-const S = { face: { ...FACE0 }, rule: { ...RULE0 }, other: { ...OTHER0 }, kind: Object.fromEntries(KINDS.map((k) => [k, { ...KIND0 }])) };
+const S = { face: { ...FACE0 }, rule: { ...RULE0 }, other: { ...OTHER0 }, learn: { ...LEARN0 }, kind: Object.fromEntries(KINDS.map((k) => [k, { ...KIND0 }])) };
 try {
   const sv = JSON.parse(localStorage.getItem('cloudDebug') || '{}');
-  for (const k of ['face', 'rule', 'other']) Object.assign(S[k], sv[k] || {});
+  for (const k of ['face', 'rule', 'other', 'learn']) Object.assign(S[k], sv[k] || {});
   for (const [k, v] of Object.entries(sv.kind || {})) if (S.kind[k]) Object.assign(S.kind[k], v);
 } catch (e) { /* none */ }
 // the per-animal settings that differ from "as shared" (what Doodle.draw takes as o.perKind)
@@ -141,7 +149,7 @@ const perKind = () => {
 const save = () => { localStorage.setItem('cloudDebug', JSON.stringify(diffObj())); writeDiff(); };
 const style = () => ({ ink: '#1c2340', lineW: S.face.lineW, boil: S.face.boil, boilFrame: 0, eyeSize: S.face.eyeSize, eyeGap: S.face.eyeGap,
   earSize: S.face.earSize, ears: S.face.ears, whiskers: S.face.whiskers, paws: S.face.paws, blush: S.face.blush, dpr: 1, gaze: false, blink: false, snakeBody: S.face.snakeBody, perKind: perKind() });
-const opts = () => ({ ...DET, ...S.rule, ...S.other });
+const opts = () => ({ ...DET, ...S.rule, ...S.other, learnW: S.learn, shapeNet: ShapeNet });
 
 // ---------------- tabs
 document.querySelectorAll('header button').forEach((b) => b.onclick = () => {
@@ -248,6 +256,21 @@ function buildFaces() {
 // ---------------- ② the rules
 const fmt = (v) => typeof v === 'boolean' ? (v ? 'はい' : 'いいえ') : (+v).toFixed(Math.abs(v) < 0.1 ? 3 : 2);
 const opJa = { '>': 'より大きい', '>=': '以上', '<': 'より小さい', is: '' };
+function buildLearn() {
+  const box = document.getElementById('learnCard');
+  box.innerHTML = `<h3>動物の決め方</h3>
+    <p><label><input type="radio" name="kindBy" value="rule"> ルール（下の R1〜R9 を上から順に）</label><br>
+    <label><input type="radio" name="kindBy" value="learn"> 学習（雲の形を、本物の動物のシルエットで学習した判定モデルに見せて、いちばん似ている動物）</label></p>
+    <p class="hint">学習のモデル：ネコ・クマ・ヒツジ・トリは本物の写真（COCO）のシルエット、ヘビ・サカナ・イルカ・クジラ・コウモリ・飛ぶトリは描いた形を、ぼかして雲のようにしたもので学習しています。<span id="learnInfo"></span></p>
+    <div class="ctl" id="learnCtl"></div>`;
+  box.querySelectorAll('input[name=kindBy]').forEach((r) => { r.checked = r.value === S.other.kindBy; r.onchange = () => { S.other.kindBy = r.value; save(); if (img) placeFaces(); }; });
+  const ctl = document.getElementById('learnCtl'), re = () => { if (img) placeFaces(); };
+  control(ctl, S.other, 'learnContext', '大きい雲はクジラ・小さい雲の群れはヒツジ（R2・R3）を先に使う', 0, 0, 0, OTHER0.learnContext, '形ではなく空の様子で決まるルールなので、学習でもそのまま使います', re);
+  control(ctl, S.other, 'learnMin', '自信がこれ未満ならルールで決める', 0, 1, 0.01, OTHER0.learnMin, '<span class="mono">learnMin</span> いちばん似ている動物の確率がこれより低いとき', re);
+  for (const k of LEARN_KINDS) control(ctl, S.learn, k, `${JA[k]}の出やすさ`, 0, 4, 0.05, 1, `<span class="mono">learn.${k}</span> 似ている度合いに掛け算（0 = 出さない）`, re);
+  ShapeNet.load().then((m) => { document.getElementById('learnInfo').textContent = ` 学習データでの正解率 ${Math.round(m.acc * 100)}%。`; re(); })
+    .catch(() => { document.getElementById('learnInfo').textContent = ' （モデル shapenet.json を読み込めませんでした）'; });
+}
 function buildRules() {
   const box = document.getElementById('ruleList'); box.innerHTML = '';
   CloudFind.RULES.forEach((r, k) => {
@@ -350,6 +373,14 @@ function listFaces() {
     if (w.special === 'hole') return `<div class="card facecard ${i === selFace ? 'sel' : ''}" id="fc${i}">${head}<p>雲に開いた丸い穴（穴の大きさ ${fmt(w.hole)}）→ のぞく。形のルールより先に決まります。</p></div>`;
     if (w.special === 'overcast') return `<div class="card facecard ${i === selFace ? 'sel' : ''}" id="fc${i}">${head}<p>雲が画面いっぱいで形が測れない（曇り空）→ クジラ。</p></div>`;
     if (!w.evals) return `<div class="card facecard" id="fc${i}">${head}</div>`;
+    let learn = '';
+    if (w.probs) {
+      const top = Object.entries(w.score).sort((a, b) => b[1] - a[1]), mx = top[0][1] || 1;
+      learn = `<canvas class="sil" data-lab="${f.lab}" width="32" height="32"></canvas><p><b>${w.by === 'context' ? `空の様子のルール（R${w.rule + 1}）で ${JA[w.kind]}` : w.by === 'unsure' ? `学習では自信がない（${Math.round(Math.max(...Object.values(w.probs)) * 100)}%）のでルールで ${JA[w.kind]}` : `学習：いちばん似ているのは ${JA[w.kind]}`}</b>`
+        + `${w.ruleKind !== w.kind ? ` <span class="hint">（ルールだけなら ${JA[w.ruleKind]}）</span>` : ' <span class="hint">（ルールと同じ）</span>'}</p><div class="pbar">`
+        + top.map(([k, v]) => `<span class="${k === w.kind ? 'top' : ''}">${JA[k]}</span><span class="${k === w.kind ? 'top' : ''}"><i style="width:${(v / mx) * 100}%"></i></span><span class="mono">${Math.round(w.probs[k] * 100)}%</span>`).join('')
+        + `</div><details><summary class="hint">ルールの判定</summary>`;
+    }
     const feats = Object.entries(w.feats).map(([k, v]) => `<span class="mono">${CloudFind.FEATS[k].ja} ${fmt(v)}</span>`).join(' ');
     const rows = w.evals.map((ev, k) => {
       const conds = ev.conds.length ? ev.conds.map((c) => {
@@ -358,8 +389,14 @@ function listFaces() {
       }).join('<br>') : '<span class="hint">条件なし</span>';
       return `<tr class="${k === w.rule ? 'hit' : ''}"><td class="mono">R${k + 1}</td><td>${JA[ev.kind]}</td><td>${conds}</td><td>${k === w.rule ? '<b>← これ</b>' : k < w.rule ? '' : '<span class="hint">（確かめない）</span>'}</td></tr>`;
     }).join('');
-    return `<div class="card facecard ${i === selFace ? 'sel' : ''}" id="fc${i}">${head}<p>${feats}</p><table><tr><th></th><th>動物</th><th>条件（測った値 と しきい値）</th><th></th></tr>${rows}</table></div>`;
+    return `<div class="card facecard ${i === selFace ? 'sel' : ''}" id="fc${i}">${head}${learn}<p>${feats}</p><table><tr><th></th><th>動物</th><th>条件（測った値 と しきい値）</th><th></th></tr>${rows}</table>${learn ? '</details>' : ''}</div>`;
   }).join('');
+  // what the model saw: the cloud's silhouette at its input size
+  box.querySelectorAll('canvas.sil').forEach((c) => {
+    const X = ShapeNet.input(det.label, det.w, det.h, +c.dataset.lab), N = Math.round(Math.sqrt(X.length)), cx = c.getContext('2d'), id = cx.createImageData(N, N);
+    for (let i = 0; i < N * N; i++) { const v = 255 - Math.round(X[i] * 230); id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
+    cx.putImageData(id, 0, 0);
+  });
 }
 
 // ---------------- ④ export
@@ -368,6 +405,7 @@ function diffObj() {
   for (const [k, v] of Object.entries(S.face)) if (v !== FACE0[k]) (out.face ||= {})[k] = v;
   for (const [k, v] of Object.entries(S.rule)) if (v !== RULE0[k]) (out.rule ||= {})[k] = v;
   for (const [k, v] of Object.entries(S.other)) if (v !== OTHER0[k]) (out.other ||= {})[k] = v;
+  for (const [k, v] of Object.entries(S.learn)) if (v !== LEARN0[k]) (out.learn ||= {})[k] = v;
   const pk = perKind(); if (Object.keys(pk).length) out.kind = pk;
   return out;
 }
@@ -378,7 +416,7 @@ function writeDiff() {
 document.getElementById('copyBtn').onclick = () => navigator.clipboard.writeText(document.getElementById('diffOut').value);
 document.getElementById('resetBtn').onclick = () => { localStorage.removeItem('cloudDebug'); location.reload(); };
 
-buildFaces(); buildRules(); writeDiff();
+buildFaces(); buildLearn(); buildRules(); writeDiff();
 { const q = new URLSearchParams(location.search).get('photo'); if (q) sel.value = q; }
 loadPhoto('photos/' + sel.value);
 { const t = new URLSearchParams(location.search).get('tab'); if (t) document.querySelector(`header button[data-tab="${t}"]`)?.click(); }

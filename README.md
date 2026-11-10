@@ -11,7 +11,12 @@ Faces hiding in clouds, leaves, anything.
   For tuning. Open it in a browser:
   1. **Faces** — every animal in every expression, each with an ID such as `cat/smile`, plus sliders for the face style.
   2. **Rules** — the shape → animal rules in the order they are checked, with threshold sliders and what each feature measures.
-  3. **Photo** — pick a cloud photo on your device; each face shows its measured features and which rules passed or failed.
+     A switch at the top picks how the animal is chosen: the **rules**, or **learned** — a small CNN that looks at the
+     cloud's silhouette and says which animal it looks most like (trained on animal silhouettes: COCO cats, bears,
+     sheep and birds, and drawn snakes, fish, dolphins, whales, bats and flying birds, blurred into cloud-like blobs).
+     Each animal has a weight; when the model is unsure, the rules decide. The camera has the same switch (動物の決め方).
+  3. **Photo** — pick a cloud photo on your device; each face shows its measured features and which rules passed or failed
+     (learned: each animal's probability and the silhouette the model saw).
      The photo stays on the device.
   4. **Export** — the settings you changed, as text to copy. Settings are kept in the browser.
 
@@ -24,6 +29,7 @@ Faces hiding in clouds, leaves, anything.
 
 - `lib/doodle.js` — draws the hand-drawn animal faces (Canvas 2D)
 - `lib/cloudfind.js` — finds clouds and their shapes in an image; the shape → animal rules (`CloudFind.RULES`)
+- `lib/shapenet.js`, `lib/shapenet.json` — the learned shape → animal classifier (plain JS, no WebGPU needed)
 - `lib/segnet.js`, `lib/segnet_worker.js` — the AI segmenter (COCO-Stuff 171 classes, onnxruntime-web, in a worker thread)
 - `lib/models/cocostuff-lraspp/` — its model (fp16 / fp32 ONNX; `_up2/4/8` = smooth edges at 1/4, 1/2, 1/1) and class names
 - `cloud/` — camera web app (`index.html`), debug page (`debug.html`), segmentation view (`seg.html`)
