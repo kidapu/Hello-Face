@@ -37,13 +37,13 @@
 const $ = (id) => document.getElementById(id), cv = $('c'), ctx = cv.getContext('2d'), video = $('v');
 const P = {
   // the model
-  size: 256,            // long side of the picture the model sees (multiples of 32)
+  size: 448,            // long side of the picture the model sees (multiples of 32)
   every: 0,             // ms between runs (0 = back to back)
   device: 'auto', precision: 'auto', worker: true,
-  up: 4,                // output resolution: 1 = 1/8 of the input (blocky), 2 = 1/4, 4 = 1/2, 8 = 1/1 (smooth edges)
+  up: 2,                // output resolution: 1 = 1/8 of the input (blocky), 2 = 1/4, 4 = 1/2, 8 = 1/1 (smooth edges)
   // the view
-  color: 'group',       // 'group' (sky / clouds / ground / ...) | 'class' (all 171) | 'confidence'
-  opacity: 0.55, smooth: false, labels: true, labelMin: 0.02, dimLowConf: 0.0, paused: false,
+  color: 'class',       // 'group' (sky / clouds / ground / ...) | 'class' (all 171) | 'confidence'
+  opacity: 0.5, smooth: true, labels: true, labelMin: 0.125, dimLowConf: 0.3, paused: false,
   camRes: 720, fit: 'contain',
 };
 const GCOL = [[90, 150, 240], [255, 255, 255], [160, 110, 60], [60, 170, 60], [130, 130, 140], [230, 60, 60], [170, 90, 200]];
