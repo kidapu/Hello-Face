@@ -41,9 +41,9 @@
 <div id="msg"></div>
 <video id="v" playsinline muted hidden></video>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/cloudfind.js"></script>
-<script src="../lib/segnet.js"></script>
-<script src="../lib/segdraw.js"></script>
+<script src="../lib/cloudfind.js?v=bf5748b"></script>
+<script src="../lib/segnet.js?v=bf5748b"></script>
+<script src="../lib/segdraw.js?v=bf5748b"></script>
 <script>
 // A debug view of the segmenter alone (segnet.js): the camera / a photo with the AI's classes on top, and the knobs
 // that decide its resolution and speed. ?photo=photos/clouds18.jpg opens a photo directly.
@@ -144,7 +144,7 @@ function buildView() {
   g.putImageData(id, 0, 0);
   // the outlines and the names (segdraw.js, shared with the camera's AI view)
   const sd = P.color === 'confidence' ? { lines: [], labels: [] } : SegDraw.build(seg, { by: P.color === 'group' ? 'group' : 'class', blur: P.edgeBlur, smooth: P.edgeSmooth,
-    lines: P.outline, min: P.edgeMin, big: P.edgeBig, labels: P.labels, labelMin: P.labelMin, nameOf: P.color === 'group' ? (k) => (P.lang === 'kana' ? SegDraw.GKANA : GJA)[k] : P.lang === 'kana' ? (k) => SegDraw.KANA[seg.names[k]] || seg.names[k] : null });
+    lines: P.outline, min: P.edgeMin, big: P.edgeBig, labels: P.labels, labelMin: P.labelMin, nameOf: P.color === 'group' ? (k) => ((P.lang === 'kana' && SegDraw.GKANA) || GJA)[k] : P.lang === 'kana' ? (k) => (SegDraw.KANA || {})[seg.names[k]] || seg.names[k] : null });
   const lines = sd.lines;
   const n = W * H, cls = [...area.keys()].filter((k) => area[k] > 0).sort((a, b) => area[b] - area[a]);
   view = { c, lines, labels: sd.labels, cls: cls.map((k) => ({ k, name: seg.names[k], g: SegNet.groupOf ? SegNet.groupOf[k] : 6, pct: area[k] / n, x: sx[k] / area[k], y: sy[k] / area[k] })) };
@@ -205,7 +205,7 @@ $('rec').onclick = () => {
   rec.start(500);
   $('rec').classList.add('on'); $('rec').textContent = '■'; say('録画中… もう一度押すと止まります');
 };
-if (document.fonts) document.fonts.load('800 16px "M PLUS Rounded 1c"', [...new Set(Object.values(SegDraw.KANA).join('') + SegDraw.GKANA.join('') + GJA.join(''))].join('')).catch(() => {});
+if (document.fonts) document.fonts.load('800 16px "M PLUS Rounded 1c"', [...new Set(Object.values(SegDraw.KANA || {}).join('') + (SegDraw.GKANA || []).join('') + GJA.join(''))].join('')).catch(() => {});
 
 // ---------------- knobs
 const gui = new lil.GUI({ title: 'セグメンテーション' });
