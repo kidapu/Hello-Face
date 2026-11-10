@@ -16,7 +16,7 @@
   #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
     background: linear-gradient(var(--sky), var(--sky2)); color: var(--ink); text-align: center; padding: 24px; box-sizing: border-box; }
   #start h1 { font-size: 30px; margin: 0 0 4px; letter-spacing: 0.04em; }
-  #devlinks { display: flex; gap: 16px; margin-top: 18px; font-size: 13px; }
+  #devlinks { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 16px; margin-top: 18px; font-size: 13px; }
   #devlinks a { color: inherit; opacity: 0.65; }
   #start p { margin: 0 0 12px; font-size: 14px; line-height: 1.6; opacity: 0.8; }
   #logo { width: 150px; height: 100px; }
@@ -57,7 +57,7 @@
   <button class="big" id="goCam">カメラで始める</button>
   <button class="big sub" id="goPhoto">写真を選ぶ</button>
   <div id="err"></div>
-  <nav id="devlinks"><a href="debug.html">デバッグ（顔・ルール・写真）</a><a href="seg.html">セグメンテーション表示</a><a href="seg.html?talk">しゃべるセグメンテーション</a></nav>
+  <nav id="devlinks"><a href="debug.html">デバッグ（顔・ルール・写真）</a><a href="seg.html">セグメンテーション表示</a><a href="seg.html?talk">セグメンテーション（ずんだもんがしゃべる版）</a></nav>
 </div>
 <div id="bar">
   <button class="btn" id="pick" aria-label="写真を選ぶ">🖼</button>
@@ -70,11 +70,11 @@
 <div id="msg"></div>
 <div id="flash"></div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=2ad95aa"></script>
-<script src="../lib/cloudfind.js?v=2ad95aa"></script>
-<script src="../lib/shapenet.js?v=2ad95aa"></script>
-<script src="../lib/segnet.js?v=2ad95aa"></script>
-<script src="../lib/segdraw.js?v=2ad95aa"></script>
+<script src="../lib/doodle.js?v=d86f830"></script>
+<script src="../lib/cloudfind.js?v=d86f830"></script>
+<script src="../lib/shapenet.js?v=d86f830"></script>
+<script src="../lib/segnet.js?v=d86f830"></script>
+<script src="../lib/segdraw.js?v=d86f830"></script>
 <script>
 // Cloud Faces: camera (or a photo) -> find the cloud bulges (cloudfind.js) several times a
 // second -> follow each bulge as a track -> doodle a cat / bear face on it (doodle.js).
