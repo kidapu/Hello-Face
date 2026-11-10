@@ -43,9 +43,9 @@
 <div id="credit" hidden>VOICEVOX:ずんだもん</div>
 <video id="v" playsinline muted hidden></video>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/cloudfind.js?v=d86f830"></script>
-<script src="../lib/segnet.js?v=d86f830"></script>
-<script src="../lib/segdraw.js?v=d86f830"></script>
+<script src="../lib/cloudfind.js?v=47cf05a"></script>
+<script src="../lib/segnet.js?v=47cf05a"></script>
+<script src="../lib/segdraw.js?v=47cf05a"></script>
 <script>
 // A debug view of the segmenter alone (segnet.js): the camera / a photo with the AI's classes on top, and the knobs
 // that decide its resolution and speed. ?photo=photos/clouds18.jpg opens a photo directly.
@@ -187,7 +187,7 @@ function frame() {
 requestAnimationFrame(frame);
 
 // ---------------- ?talk: tap a region, hear its name
-let actx = null, tap = null, voiceList = null;
+let actx = null, tap = null, voiceList = null, recDest = null;
 const voiceBuf = {};
 const VOICE = new URL('voice/', (document.querySelector('script[src*="segdraw.js"]') || {}).src || location.href).href,
   VER = new URL((document.querySelector('script[src*="segdraw.js"]') || {}).src || location.href).search;
@@ -196,14 +196,26 @@ function unlockAudio() {   // iOS: the audio only plays once it was started in a
   try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); } catch (e) {}
   if (!voiceList) voiceList = fetch(VOICE + 'voice.json' + VER).then((r) => r.json()).catch(() => ({}));
 }
+// which phrase: a / b / c by turns (never the same twice in a row); the same thing tapped again: 「また〇〇なのだ！」,
+// a third time:「〇〇がすきなのだ？」, then by turns again
+let lastWord = null, again = 0, lastP = null, lastAt = 0;
+function phraseFor(word) {
+  const now = performance.now();   // "again" only within 10 s
+  again = word === lastWord && now - lastAt < 10000 ? again + 1 : 0; lastWord = word; lastAt = now;
+  if (again === 1) return 'm';
+  if (again === 2) return 's';
+  const ps = ['a', 'b', 'c'].filter((p) => p !== lastP); lastP = ps[Math.floor(Math.random() * ps.length)];
+  return lastP;
+}
 async function speak(word) {
   if (!actx || !voiceList) unlockAudio();
   if (actx.state !== 'running') actx.resume();
-  const f = (await voiceList)[word]; if (!f) return;
+  const vl = await voiceList, n = vl.words ? vl.words[word] : undefined; if (n == null) return;
+  const f = `v${n}${phraseFor(word)}.mp3`;
   try {
     voiceBuf[f] = voiceBuf[f] || fetch(VOICE + f + VER).then((r) => r.arrayBuffer()).then((b) => new Promise((ok, ng) => actx.decodeAudioData(b, ok, ng)));
     const src = actx.createBufferSource(), g = actx.createGain(); g.gain.value = P.volume;
-    src.buffer = await voiceBuf[f]; src.connect(g).connect(actx.destination);
+    src.buffer = await voiceBuf[f]; src.connect(g).connect(actx.destination); if (recDest) g.connect(recDest);   // and into the recording
     if (speak.cur) try { speak.cur.stop(); } catch (e) {}
     speak.cur = src; src.start();
     if (tap && tap.word === word) tap.dur = performance.now() - tap.t + src.buffer.duration * 1000;   // the label grows back as the voice ends
@@ -250,9 +262,25 @@ let rec = null;
 $('rec').onclick = () => {
   if (rec) { rec.stop(); return; }
   if (!cv.captureStream || !window.MediaRecorder) { say('このブラウザは録画に対応していません'); return; }
-  const type = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find((t) => MediaRecorder.isTypeSupported(t)) || '';
+  // ?talk: Zundamon's voice goes into the video too (an audio track fed by the same Web Audio graph)
+  const tracks = cv.captureStream(30).getVideoTracks();
+  if (TALK) {
+    unlockAudio();
+    try {
+      if (!recDest) {
+        recDest = actx.createMediaStreamDestination();
+        // a constant, inaudible hum: the track then runs from the start (silence alone may leave it empty until
+        // the first voice, and the voice would land at the start of the video)
+        const o = actx.createOscillator(), q = actx.createGain(); q.gain.value = 0.0005; o.connect(q).connect(recDest); o.start();
+      }
+      tracks.push(...recDest.stream.getAudioTracks());
+    } catch (e) { recDest = null; }
+  }
+  const withAudio = tracks.length > 1;
+  const type = (withAudio ? ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'] : ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'])
+    .find((t) => MediaRecorder.isTypeSupported(t)) || '';
   const chunks = [];
-  rec = new MediaRecorder(cv.captureStream(30), type ? { mimeType: type, videoBitsPerSecond: 8e6 } : undefined);
+  rec = new MediaRecorder(new MediaStream(tracks), type ? { mimeType: type, videoBitsPerSecond: 8e6, audioBitsPerSecond: 96e3 } : undefined);
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   rec.onstop = () => {
     $('rec').classList.remove('on'); $('rec').textContent = '●';
