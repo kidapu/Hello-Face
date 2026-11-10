@@ -23,6 +23,7 @@
     -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); z-index: 4; }
   #rec.on { background: #e5334d; }
   #msg { position: fixed; left: 50%; bottom: calc(100px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: #000b; padding: 6px 12px; border-radius: 14px; opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap; }
+  #credit { position: fixed; right: 8px; bottom: calc(6px + env(safe-area-inset-bottom)); font-size: 11px; opacity: 0.7; pointer-events: none; }
   .lil-gui.root { --width: 270px; max-height: 70vh; }
 </style>
 </head>
@@ -39,15 +40,18 @@
 <div id="loading" hidden><div class="spin"></div><div id="loadTxt"></div></div>
 <button id="rec" hidden aria-label="録画">●</button>
 <div id="msg"></div>
+<div id="credit" hidden>VOICEVOX:ずんだもん</div>
 <video id="v" playsinline muted hidden></video>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/cloudfind.js?v=bf5748b"></script>
-<script src="../lib/segnet.js?v=bf5748b"></script>
-<script src="../lib/segdraw.js?v=bf5748b"></script>
+<script src="../lib/cloudfind.js?v=33d0696"></script>
+<script src="../lib/segnet.js?v=33d0696"></script>
+<script src="../lib/segdraw.js?v=33d0696"></script>
 <script>
 // A debug view of the segmenter alone (segnet.js): the camera / a photo with the AI's classes on top, and the knobs
 // that decide its resolution and speed. ?photo=photos/clouds18.jpg opens a photo directly.
+// ?talk: tap a region and Zundamon (VOICEVOX, voices made by voice/make_voice.py) says its name.
 const $ = (id) => document.getElementById(id), cv = $('c'), ctx = cv.getContext('2d'), video = $('v');
+const TALK = new URLSearchParams(location.search).has('talk');
 const P = {
   // the model
   size: 448,            // long side of the picture the model sees (multiples of 32)
@@ -65,6 +69,8 @@ const P = {
   edgeBig: 0.07,        // regions over 7% of the picture count as background (their lines move into them)
   camRes: 720, fit: 'contain',
   temporal: true, hold: 3, sure: 0.9,   // steadier labels on video (SegNet.smoother)
+  hud: !TALK,           // the numbers top left
+  volume: 1,            // the voice (?talk)
 };
 const GCOL = [[90, 150, 240], [255, 255, 255], [160, 110, 60], [60, 170, 60], [130, 130, 140], [230, 60, 60], [170, 90, 200]];
 const GJA = ['空', '雲', '地面', '植物', '建物', '人', 'その他'];
@@ -82,13 +88,14 @@ function usePhoto(blob) {
   const im = new Image(); im.onload = () => { if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; } img = im; mode = 'photo'; seg = null; begin(); };
   im.src = URL.createObjectURL(blob);
 }
-$('cam').onclick = startCam;
+$('cam').onclick = () => { unlockAudio(); startCam(); };
+$('file').onclick = unlockAudio;
 $('file').onchange = (e) => { const f = e.target.files[0]; if (f) usePhoto(f); };
 const source = () => mode === 'cam' ? video : img;
 const srcSize = () => mode === 'cam' ? [video.videoWidth, video.videoHeight] : img ? [img.width, img.height] : [0, 0];
 let started = false;
 async function begin() {
-  $('start').style.display = 'none'; $('hud').hidden = false; $('rec').hidden = false; resize();
+  $('start').style.display = 'none'; $('hud').hidden = !P.hud; $('credit').hidden = !TALK; $('rec').hidden = false; resize();
   if (!started) { started = true; await loadModel(); loop(); }
 }
 
@@ -163,6 +170,7 @@ function frame() {
       SegDraw.draw(ctx, view, { ox: layout.ox, oy: layout.oy, kx: layout.w / seg.W, ky: layout.h / seg.H },
         { dpr: Math.min(2, window.devicePixelRatio || 1), grow: P.edgeGrow, lineW: P.lineW, labels: P.labels });
     }
+    drawTap(now);
   }
   const f = (v) => v == null ? '-' : v.toFixed(1);
   $('loading').hidden = !loadMsg; $('loadTxt').textContent = loadMsg;
@@ -176,6 +184,63 @@ function frame() {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// ---------------- ?talk: tap a region, hear its name
+let actx = null, tap = null, voiceList = null;
+const voiceBuf = {};
+const VOICE = new URL('voice/', (document.querySelector('script[src*="segdraw.js"]') || {}).src || location.href).href,
+  VER = new URL((document.querySelector('script[src*="segdraw.js"]') || {}).src || location.href).search;
+function unlockAudio() {   // iOS: the audio only plays once it was started in a tap
+  if (!TALK) return;
+  try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); } catch (e) {}
+  if (!voiceList) voiceList = fetch(VOICE + 'voice.json' + VER).then((r) => r.json()).catch(() => ({}));
+}
+async function speak(word) {
+  if (!actx || !voiceList) unlockAudio();
+  if (actx.state !== 'running') actx.resume();
+  const f = (await voiceList)[word]; if (!f) return;
+  try {
+    voiceBuf[f] = voiceBuf[f] || fetch(VOICE + f + VER).then((r) => r.arrayBuffer()).then((b) => new Promise((ok, ng) => actx.decodeAudioData(b, ok, ng)));
+    const src = actx.createBufferSource(), g = actx.createGain(); g.gain.value = P.volume;
+    src.buffer = await voiceBuf[f]; src.connect(g).connect(actx.destination);
+    if (speak.cur) try { speak.cur.stop(); } catch (e) {}
+    speak.cur = src; src.start();
+  } catch (e) { delete voiceBuf[f]; }
+}
+function onTap(e) {
+  if (!TALK || !seg || !layout.w) return;
+  const k2 = cv.width / innerWidth, px = e.clientX * k2, py = e.clientY * k2;
+  const gx = Math.floor((px - layout.ox) / layout.w * seg.W), gy = Math.floor((py - layout.oy) / layout.h * seg.H);
+  if (gx < 0 || gy < 0 || gx >= seg.W || gy >= seg.H) return;
+  const byG = P.color === 'group', key = byG ? seg.group : seg.label, k = key[gy * seg.W + gx];
+  const word = byG ? (SegDraw.GKANA || GJA)[k] : (SegDraw.KANA || {})[seg.names[k]] || seg.names[k];
+  // the region, white, to flash over the picture
+  const c = document.createElement('canvas'); c.width = seg.W; c.height = seg.H;
+  const g = c.getContext('2d'), id = g.createImageData(seg.W, seg.H);
+  for (let i = 0; i < seg.W * seg.H; i++) if (key[i] === k) id.data.set([255, 255, 255, 150], i * 4);
+  g.putImageData(id, 0, 0);
+  tap = { c, word, x: px, y: py, t: performance.now() };
+  speak(word);
+}
+cv.addEventListener('pointerdown', onTap);
+function drawTap(now) {
+  if (!tap) return;
+  const a = 1 - (now - tap.t) / 1600; if (a <= 0) { tap = null; return; }
+  ctx.save(); ctx.globalAlpha = Math.min(1, a * 1.5);
+  ctx.drawImage(tap.c, layout.ox, layout.oy, layout.w, layout.h);
+  const dpr = Math.min(2, window.devicePixelRatio || 1), fs = 30 * dpr;
+  ctx.font = `800 ${fs}px "M PLUS Rounded 1c", system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const w = ctx.measureText(tap.word).width + fs, h = fs * 1.5, x = Math.max(w / 2, Math.min(cv.width - w / 2, tap.x)), y = Math.max(h, tap.y - h);
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = '#1c2340'; ctx.lineWidth = 3 * dpr;
+  ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - w / 2, y - h / 2, w, h, h / 2) : ctx.rect(x - w / 2, y - h / 2, w, h); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#1c2340'; ctx.fillText(tap.word, x, y + fs * 0.05);
+  ctx.restore();
+}
+if (TALK) {
+  document.title = 'しゃべるセグメンテーション';
+  $('start').children[0].textContent = 'さわると、ずんだもんがなまえをおしえてくれるよ';
+  $('start').children[1].innerHTML = 'カメラにうつったものや写真のところをタップすると、AI がなにかを見分けて声で教えます。<br>モデル（約 7 MB）はここで初めて読み込みます。<br><small>音声: VOICEVOX:ずんだもん</small>';
+}
 
 // ---------------- recording
 let msgT = 0;
@@ -240,6 +305,8 @@ gv.add(P, 'labelMin', 0, 0.2, 0.005).name('名前を出す最小の面積');
 gv.add(P, 'dimLowConf', 0, 1, 0.05).name('自信がない所を薄く (しきい値)').onChange(() => (view = null));
 gv.add(P, 'fit', ['contain', 'cover']).name('画面の合わせ方');
 const gc = gui.addFolder('カメラ');
+gv.add(P, 'hud').name('数値を表示').onChange((v) => ($('hud').hidden = !v || !mode));
+if (TALK) gv.add(P, 'volume', 0, 1, 0.05).name('声の大きさ');
 gc.add(P, 'camRes', [360, 480, 720, 1080]).name('カメラの解像度 (縦)').onChange(() => { if (mode === 'cam') startCam(); });
 gui.close();
 { const q = new URLSearchParams(location.search).get('photo'); if (q) fetch(q).then((r) => r.blob()).then(usePhoto); }

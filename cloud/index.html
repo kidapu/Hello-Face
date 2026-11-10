@@ -57,7 +57,7 @@
   <button class="big" id="goCam">カメラで始める</button>
   <button class="big sub" id="goPhoto">写真を選ぶ</button>
   <div id="err"></div>
-  <nav id="devlinks"><a href="debug.html">デバッグ（顔・ルール・写真）</a><a href="seg.html">セグメンテーション表示</a></nav>
+  <nav id="devlinks"><a href="debug.html">デバッグ（顔・ルール・写真）</a><a href="seg.html">セグメンテーション表示</a><a href="seg.html?talk">しゃべるセグメンテーション</a></nav>
 </div>
 <div id="bar">
   <button class="btn" id="pick" aria-label="写真を選ぶ">🖼</button>
@@ -70,11 +70,11 @@
 <div id="msg"></div>
 <div id="flash"></div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=bf5748b"></script>
-<script src="../lib/cloudfind.js?v=bf5748b"></script>
-<script src="../lib/shapenet.js?v=bf5748b"></script>
-<script src="../lib/segnet.js?v=bf5748b"></script>
-<script src="../lib/segdraw.js?v=bf5748b"></script>
+<script src="../lib/doodle.js?v=33d0696"></script>
+<script src="../lib/cloudfind.js?v=33d0696"></script>
+<script src="../lib/shapenet.js?v=33d0696"></script>
+<script src="../lib/segnet.js?v=33d0696"></script>
+<script src="../lib/segdraw.js?v=33d0696"></script>
 <script>
 // Cloud Faces: camera (or a photo) -> find the cloud bulges (cloudfind.js) several times a
 // second -> follow each bulge as a track -> doodle a cat / bear face on it (doodle.js).

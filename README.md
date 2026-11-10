@@ -25,6 +25,10 @@ Faces hiding in clouds, leaves, anything.
   Knobs for speed and resolution: input size, output resolution (1/8 blocky … 1/1 smooth edges), interval between runs,
   GPU / CPU, fp16 / fp32, worker thread, camera resolution; timings shown at the top left.
 
+- **Talking segmentation** — https://kidapu.github.io/Hello-Face/cloud/seg.html?talk
+  Tap a region and Zundamon says its name in Japanese (voices made in advance with VOICEVOX).
+  Voice: VOICEVOX:ずんだもん
+
 ## Layout
 
 - `lib/doodle.js` — draws the hand-drawn animal faces (Canvas 2D)
@@ -32,4 +36,5 @@ Faces hiding in clouds, leaves, anything.
 - `lib/shapenet.js`, `lib/shapenet.json` — the learned shape → animal classifier (plain JS, no WebGPU needed)
 - `lib/segnet.js`, `lib/segnet_worker.js` — the AI segmenter (COCO-Stuff 171 classes, onnxruntime-web, in a worker thread)
 - `lib/models/cocostuff-lraspp/` — its model (fp16 / fp32 ONNX; `_up2/4/8` = smooth edges at 1/4, 1/2, 1/1) and class names
+- `lib/voice/` — the spoken names for `seg.html?talk` (mp3, VOICEVOX:ずんだもん; `voice.json` = word → file)
 - `cloud/` — camera web app (`index.html`), debug page (`debug.html`), segmentation view (`seg.html`)
