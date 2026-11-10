@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Segmentation view</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d1220; color: #fff; font: 13px/1.45 system-ui, "Hiragino Sans", sans-serif; overflow: hidden; }
+  canvas#c { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  #start { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; text-align: center; padding: 20px; }
+  #start button, #start label { font: 600 16px system-ui; padding: 12px 22px; border-radius: 24px; border: 0; background: #3a7be0; color: #fff; cursor: pointer; }
+  #start label { background: #ffffff22; }
+  #hud { position: fixed; left: 8px; top: calc(8px + env(safe-area-inset-top)); background: #000a; padding: 6px 9px; border-radius: 8px; font: 12px ui-monospace, Consolas, monospace; white-space: pre; pointer-events: none; }
+  #legend { position: fixed; left: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); background: #000a; padding: 6px 9px; border-radius: 8px; font-size: 12px; max-height: 40vh; overflow: auto; }
+  #legend .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  #err { color: #ff9aa8; }
+  .lil-gui.root { --width: 270px; max-height: 70vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="start">
+  <div style="font-size:18px;font-weight:700">セグメンテーションだけを見るデバッグビュー</div>
+  <div style="opacity:.8">顔は描きません。AI が判定した種類を色で重ねて、速さと解像度を調整します。<br>モデル（約 7 MB）はここで初めて読み込みます。</div>
+  <button id="cam">カメラで見る</button>
+  <label>写真を選ぶ<input type="file" id="file" accept="image/*" hidden></label>
+  <div id="err"></div>
+</div>
+<div id="hud" hidden></div>
+<div id="legend" hidden></div>
+<video id="v" playsinline muted hidden></video>
+<script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
+<script src="../lib/segnet.js"></script>
+<script>
+// A debug view of the segmenter alone (segnet.js): the camera / a photo with the AI's classes on top, and the knobs
+// that decide its resolution and speed. ?photo=photos/clouds18.jpg opens a photo directly.
+const $ = (id) => document.getElementById(id), cv = $('c'), ctx = cv.getContext('2d'), video = $('v');
+const P = {
+  // the model
+  size: 256,            // long side of the picture the model sees (multiples of 32)
+  every: 0,             // ms between runs (0 = back to back)
+  device: 'auto', precision: 'auto', worker: true,
+  up: 4,                // output resolution: 1 = 1/8 of the input (blocky), 2 = 1/4, 4 = 1/2, 8 = 1/1 (smooth edges)
+  // the view
+  color: 'group',       // 'group' (sky / clouds / ground / ...) | 'class' (all 171) | 'confidence'
+  opacity: 0.55, smooth: false, labels: true, labelMin: 0.02, dimLowConf: 0.0, paused: false,
+  camRes: 720, fit: 'contain',
+};
+const GCOL = [[90, 150, 240], [255, 255, 255], [160, 110, 60], [60, 170, 60], [130, 130, 140], [230, 60, 60], [170, 90, 200]];
+const GJA = ['空', '雲', '地面', '植物', '建物', '人', 'その他'];
+let mode = null, img = null, stream = null, seg = null, segSrc = null, stat = null, runs = 0, lastDone = 0, gap = 0, frames = 0, fps = 0, fpsT = performance.now();
+
+// ---------------- sources
+async function startCam() {
+  try {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, height: { ideal: P.camRes }, width: { ideal: Math.round(P.camRes * 16 / 9) } } });
+    video.srcObject = stream; await video.play(); mode = 'cam'; img = null; begin();
+  } catch (e) { $('err').textContent = 'カメラを開けませんでした: ' + (e.name || e.message || e) + '（https で開いてください）'; }
+}
+function usePhoto(blob) {
+  const im = new Image(); im.onload = () => { if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; } img = im; mode = 'photo'; seg = null; begin(); };
+  im.src = URL.createObjectURL(blob);
+}
+$('cam').onclick = startCam;
+$('file').onchange = (e) => { const f = e.target.files[0]; if (f) usePhoto(f); };
+const source = () => mode === 'cam' ? video : img;
+const srcSize = () => mode === 'cam' ? [video.videoWidth, video.videoHeight] : img ? [img.width, img.height] : [0, 0];
+let started = false;
+async function begin() {
+  $('start').style.display = 'none'; $('hud').hidden = false; $('legend').hidden = false; resize();
+  if (!started) { started = true; await loadModel(); loop(); }
+}
+
+// ---------------- the model
+let loadMsg = '';
+async function loadModel() {
+  SegNet.reset(); seg = null; stat = null; runs = 0; gap = 0;
+  try { await SegNet.load((t) => (loadMsg = t), { worker: P.worker, device: P.device, precision: P.precision, up: P.up }); loadMsg = ''; }
+  catch (e) { loadMsg = 'モデルを読み込めませんでした: ' + (e.message || e); }
+}
+let reloading = null;
+async function loop() {
+  for (;;) {
+    const t0 = performance.now(), [sw, sh] = srcSize();
+    if (reloading) { await reloading; reloading = null; }
+    const stillPhoto = mode === 'photo' && segSrc === img && seg && seg.w === SegNet.inputSize(sw, sh, P.size)[0];
+    if (!P.paused && SegNet.ready && sw && !stillPhoto) {
+      try {
+        const r = await SegNet.run(source(), 0, 0, P.size);
+        seg = r; segSrc = img; runs++;
+        const st = { infer: r.ms, prep: r.prep, post: r.post, total: performance.now() - t0 };
+        stat = stat ? Object.fromEntries(Object.entries(st).map(([k, v]) => [k, stat[k] * 0.85 + v * 0.15])) : st;
+        const now = performance.now(); gap = lastDone ? (gap ? gap * 0.85 + (now - lastDone) * 0.15 : now - lastDone) : 0; lastDone = now;
+        view = null;
+      } catch (e) { if (String(e.message) !== 'reset') loadMsg = 'エラー: ' + (e.message || e); }
+    }
+    const dt = performance.now() - t0;
+    await new Promise((r) => setTimeout(r, Math.max(P.every - dt, stillPhoto || P.paused ? 100 : 0)));
+  }
+}
+
+// ---------------- drawing
+let view = null, layout = { s: 1, ox: 0, oy: 0 };
+function resize() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(innerWidth * dpr); cv.height = Math.round(innerHeight * dpr);
+}
+addEventListener('resize', resize);
+function hue(k) { const h = (k * 137.508) % 360, f = (n) => { const q = (n + h / 30) % 12; return Math.round(255 * (0.55 - 0.45 * Math.max(-1, Math.min(q - 3, 9 - q, 1)))); }; return [f(0), f(8), f(4)]; }
+function buildView() {
+  const W = seg.W, H = seg.H, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d'), id = g.createImageData(W, H), A = Math.round(P.opacity * 255);
+  const area = new Int32Array(seg.names.length), sx = new Float64Array(seg.names.length), sy = new Float64Array(seg.names.length);
+  for (let i = 0; i < W * H; i++) {
+    const k = seg.label[i], cf = seg.conf[i] / 255;
+    area[k]++; sx[k] += i % W; sy[k] += Math.floor(i / W);
+    const col = P.color === 'class' ? hue(k) : P.color === 'confidence' ? [255 * (1 - cf), 255 * cf, 60] : GCOL[seg.group[i]];
+    const a = P.dimLowConf > 0 && cf < P.dimLowConf ? A * 0.25 : A;
+    id.data.set([col[0], col[1], col[2], a], i * 4);
+  }
+  g.putImageData(id, 0, 0);
+  const n = W * H, cls = [...area.keys()].filter((k) => area[k] > 0).sort((a, b) => area[b] - area[a]);
+  view = { c, cls: cls.map((k) => ({ k, name: seg.names[k], g: SegNet.groupOf ? SegNet.groupOf[k] : 6, pct: area[k] / n, x: sx[k] / area[k], y: sy[k] / area[k] })) };
+  // legend
+  let html;
+  if (P.color === 'group') {
+    const gp = new Float64Array(7); for (const q of view.cls) gp[q.g] += q.pct;
+    html = GJA.map((nm, gi) => gp[gi] > 0 ? `<div><span class="sw" style="background:rgb(${GCOL[gi]})"></span>${nm} ${(gp[gi] * 100).toFixed(0)}%</div>` : '').join('');
+  } else if (P.color === 'class') {
+    html = view.cls.slice(0, 14).map((q) => `<div><span class="sw" style="background:rgb(${hue(q.k)})"></span>${q.name} ${(q.pct * 100).toFixed(1)}%</div>`).join('');
+  } else html = '<div><span class="sw" style="background:rgb(255,0,60)"></span>自信なし　<span class="sw" style="background:rgb(0,255,60)"></span>自信あり</div>';
+  $('legend').innerHTML = html;
+}
+function frame() {
+  frames++; const now = performance.now(); if (now - fpsT > 500) { fps = frames * 1000 / (now - fpsT); frames = 0; fpsT = now; }
+  ctx.fillStyle = '#0d1220'; ctx.fillRect(0, 0, cv.width, cv.height);
+  const [sw, sh] = srcSize();
+  if (mode && sw) {
+    const s = (P.fit === 'cover' ? Math.max : Math.min)(cv.width / sw, cv.height / sh);
+    layout = { s, ox: (cv.width - sw * s) / 2, oy: (cv.height - sh * s) / 2, w: sw * s, h: sh * s };
+    ctx.drawImage(source(), layout.ox, layout.oy, layout.w, layout.h);
+    if (seg) {
+      if (!view) buildView();
+      ctx.imageSmoothingEnabled = P.smooth; ctx.drawImage(view.c, layout.ox, layout.oy, layout.w, layout.h); ctx.imageSmoothingEnabled = true;
+      if (P.labels) {
+        const dpr = Math.min(2, window.devicePixelRatio || 1), fs = Math.round(11 * dpr);
+        ctx.font = `bold ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        for (const q of view.cls) {
+          if (q.pct < P.labelMin) continue;
+          const X = layout.ox + (q.x + 0.5) / seg.W * layout.w, Y = layout.oy + (q.y + 0.5) / seg.H * layout.h, tw = ctx.measureText(q.name).width + fs * 0.8;
+          ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(X - tw / 2, Y - fs * 0.75, tw, fs * 1.5); ctx.fillStyle = '#fff'; ctx.fillText(q.name, X, Y);
+        }
+      }
+    }
+  }
+  const f = (v) => v == null ? '-' : v.toFixed(1);
+  $('hud').textContent = loadMsg || [
+    `${SegNet.device === 'webgpu' ? 'GPU' : SegNet.device ? 'CPU' : '-'} ${SegNet.precision || ''}${SegNet.worker ? ' 別スレッド' : ' メインスレッド'}`,
+    `入力 ${seg ? seg.w + 'x' + seg.h : '-'} → 出力 ${seg ? seg.w8 + 'x' + seg.h8 : '-'}`,
+    `推論 ${f(stat && stat.infer)} ms  前処理 ${f(stat && stat.prep)}  後処理 ${f(stat && stat.post)}`,
+    `1回 ${f(stat && stat.total)} ms  認識 ${gap ? (1000 / gap).toFixed(1) : '-'} 回/秒  画面 ${fps.toFixed(0)} fps`,
+    `カメラ ${sw}x${sh}  回数 ${runs}`,
+  ].join('\n');
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---------------- knobs
+const gui = new lil.GUI({ title: 'セグメンテーション' });
+const reload = () => { reloading = loadModel(); };
+const gm = gui.addFolder('モデル（速さ・解像度）');
+gm.add(P, 'size', [128, 160, 192, 224, 256, 320, 384, 448, 512, 640]).name('入力の大きさ (長い辺 px)').onChange(() => { seg = null; });
+gm.add(P, 'up', { '1/8（カクカク）': 1, '1/4': 2, '1/2': 4, '1/1（なめらか）': 8 }).name('出力の解像度 (入力に対して)').onChange(reload);
+gm.add(P, 'every', 0, 2000, 10).name('認識の間隔 (ms)');
+gm.add(P, 'device', ['auto', 'webgpu', 'wasm']).name('実行 (GPU / CPU)').onChange(reload);
+gm.add(P, 'precision', ['auto', 'fp16', 'fp32']).name('精度 (fp16 / fp32)').onChange(reload);
+gm.add(P, 'worker').name('別スレッドで実行').onChange(reload);
+gm.add(P, 'paused').name('一時停止');
+const gv = gui.addFolder('表示');
+gv.add(P, 'color', { '大分類 (空・雲・地面…)': 'group', '171 種類すべて': 'class', '自信の度合い': 'confidence' }).name('色分け').onChange(() => (view = null));
+gv.add(P, 'opacity', 0, 1, 0.05).name('重ねる濃さ').onChange(() => (view = null));
+gv.add(P, 'smooth').name('なめらかに拡大');
+gv.add(P, 'labels').name('名前を表示');
+gv.add(P, 'labelMin', 0, 0.2, 0.005).name('名前を出す最小の面積');
+gv.add(P, 'dimLowConf', 0, 1, 0.05).name('自信がない所を薄く (しきい値)').onChange(() => (view = null));
+gv.add(P, 'fit', ['contain', 'cover']).name('画面の合わせ方');
+const gc = gui.addFolder('カメラ');
+gc.add(P, 'camRes', [360, 480, 720, 1080]).name('カメラの解像度 (縦)').onChange(() => { if (mode === 'cam') startCam(); });
+gui.close();
+{ const q = new URLSearchParams(location.search).get('photo'); if (q) fetch(q).then((r) => r.blob()).then(usePhoto); }
+</script>
+</body>
+</html>

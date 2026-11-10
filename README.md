@@ -15,10 +15,15 @@ Faces hiding in clouds, leaves, anything.
      The photo stays on the device.
   4. **Export** — the settings you changed, as text to copy. Settings are kept in the browser.
 
+- **Segmentation view** — https://kidapu.github.io/Hello-Face/cloud/seg.html
+  The AI's segmentation alone (no faces), on the camera or a photo, coloured by group, by class or by confidence.
+  Knobs for speed and resolution: input size, output resolution (1/8 blocky … 1/1 smooth edges), interval between runs,
+  GPU / CPU, fp16 / fp32, worker thread, camera resolution; timings shown at the top left.
+
 ## Layout
 
 - `lib/doodle.js` — draws the hand-drawn animal faces (Canvas 2D)
 - `lib/cloudfind.js` — finds clouds and their shapes in an image; the shape → animal rules (`CloudFind.RULES`)
-- `lib/segnet.js` — the AI segmenter (COCO-Stuff 171 classes, onnxruntime-web)
-- `lib/models/cocostuff-lraspp/` — its model (fp16 / fp32 ONNX) and class names
-- `cloud/` — camera web app (`index.html`) and debug page (`debug.html`)
+- `lib/segnet.js`, `lib/segnet_worker.js` — the AI segmenter (COCO-Stuff 171 classes, onnxruntime-web, in a worker thread)
+- `lib/models/cocostuff-lraspp/` — its model (fp16 / fp32 ONNX; `_up2/4/8` = smooth edges at 1/4, 1/2, 1/1) and class names
+- `cloud/` — camera web app (`index.html`), debug page (`debug.html`), segmentation view (`seg.html`)
