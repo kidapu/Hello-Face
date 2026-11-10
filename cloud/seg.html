@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Segmentation view</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@800&display=swap" rel="stylesheet">
 <style>
   html, body { margin: 0; height: 100%; background: #0d1220; color: #fff; font: 13px/1.45 system-ui, "Hiragino Sans", sans-serif; overflow: hidden; }
   canvas#c { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
@@ -11,13 +13,16 @@
   #start button, #start label { font: 600 16px system-ui; padding: 12px 22px; border-radius: 24px; border: 0; background: #3a7be0; color: #fff; cursor: pointer; }
   #start label { background: #ffffff22; }
   #hud { position: fixed; left: 8px; top: calc(8px + env(safe-area-inset-top)); background: #000a; padding: 6px 9px; border-radius: 8px; font: 12px ui-monospace, Consolas, monospace; white-space: pre; pointer-events: none; }
-  #legend { position: fixed; left: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); background: #000a; padding: 6px 9px; border-radius: 8px; font-size: 12px; max-height: 40vh; overflow: auto; }
-  #legend .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
   #err { color: #ff9aa8; }
   #loading { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); background: #000c; padding: 16px 22px; border-radius: 14px; font-size: 15px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 5; }
   #loading[hidden], #loading .spin[hidden] { display: none; }
   #loading .spin { width: 28px; height: 28px; border: 3px solid #ffffff44; border-top-color: #fff; border-radius: 50%; animation: sp 0.9s linear infinite; }
   @keyframes sp { to { transform: rotate(360deg); } }
+  #rec { position: fixed; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom)); transform: translateX(-50%); width: 64px; height: 64px; border-radius: 50%;
+    border: 4px solid #fff; background: #ffffff40; color: #fff; font-size: 22px; display: flex; align-items: center; justify-content: center; padding: 0;
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); z-index: 4; }
+  #rec.on { background: #e5334d; }
+  #msg { position: fixed; left: 50%; bottom: calc(100px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: #000b; padding: 6px 12px; border-radius: 14px; opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap; }
   .lil-gui.root { --width: 270px; max-height: 70vh; }
 </style>
 </head>
@@ -32,11 +37,13 @@
 </div>
 <div id="hud" hidden></div>
 <div id="loading" hidden><div class="spin"></div><div id="loadTxt"></div></div>
-<div id="legend" hidden></div>
+<button id="rec" hidden aria-label="録画">●</button>
+<div id="msg"></div>
 <video id="v" playsinline muted hidden></video>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
 <script src="../lib/cloudfind.js"></script>
 <script src="../lib/segnet.js"></script>
+<script src="../lib/segdraw.js"></script>
 <script>
 // A debug view of the segmenter alone (segnet.js): the camera / a photo with the AI's classes on top, and the knobs
 // that decide its resolution and speed. ?photo=photos/clouds18.jpg opens a photo directly.
@@ -49,11 +56,12 @@ const P = {
   up: 2,                // output resolution: 1 = 1/8 of the input (blocky), 2 = 1/4, 4 = 1/2, 8 = 1/1 (smooth edges)
   // the view
   color: 'class',       // 'group' (sky / clouds / ground / ...) | 'class' (all 171) | 'confidence'
-  opacity: 0.5, smooth: true, labels: true, labelMin: 0.125, dimLowConf: 0.3, paused: false,
+  opacity: 0.55, smooth: false, labels: true, labelMin: 0.015, dimLowConf: 0, paused: false,
   fill: false,          // paint the regions
   outline: true,        // trace each region's edge in its colour (a smoothed polyline)
-  lineW: 2.5, edgeBlur: 1, edgeSmooth: 3, edgeMin: 0.003,
-  edgeGrow: 4, edgeBig: 0.15,   // regions over 15% of the picture count as background          // push the outlines outward (screen px): smoothing and the blur pull them inside the objects
+  lineW: 2.5, edgeBlur: 3, edgeSmooth: 4, edgeMin: 0.005,
+  edgeGrow: 4,          // push the outlines outward (screen px): smoothing and the blur pull them inside the objects
+  edgeBig: 0.07,        // regions over 7% of the picture count as background (their lines move into them)
   camRes: 720, fit: 'contain',
 };
 const GCOL = [[90, 150, 240], [255, 255, 255], [160, 110, 60], [60, 170, 60], [130, 130, 140], [230, 60, 60], [170, 90, 200]];
@@ -78,7 +86,7 @@ const source = () => mode === 'cam' ? video : img;
 const srcSize = () => mode === 'cam' ? [video.videoWidth, video.videoHeight] : img ? [img.width, img.height] : [0, 0];
 let started = false;
 async function begin() {
-  $('start').style.display = 'none'; $('hud').hidden = false; $('legend').hidden = false; resize();
+  $('start').style.display = 'none'; $('hud').hidden = false; $('rec').hidden = false; resize();
   if (!started) { started = true; await loadModel(); loop(); }
 }
 
@@ -130,48 +138,12 @@ function buildView() {
     id.data.set([col[0], col[1], col[2], a], i * 4);
   }
   g.putImageData(id, 0, 0);
-  // the outlines: one mask per class (or per group), marching squares + Chaikin (CloudFind.outlines)
-  const lines = [];
-  if (P.outline && P.color !== 'confidence') {
-    const byGroup = P.color === 'group', key = byGroup ? seg.group : seg.label, nk = byGroup ? 7 : seg.names.length;
-    const cnt = new Int32Array(nk); for (let i = 0; i < W * H; i++) cnt[key[i]]++;
-    for (let k = 0; k < nk; k++) {
-      if (cnt[k] < W * H * P.edgeMin) continue;
-      const mask = new Uint8Array(W * H); for (let i = 0; i < W * H; i++) mask[i] = key[i] === k ? 1 : 0;
-      const col = byGroup ? GCOL[k] : hue(k);
-      for (const l of CloudFind.outlines({ w: W, h: H, mask }, { outlineBlur: P.edgeBlur, outlineSmooth: P.edgeSmooth, outlineMin: 3 })) {
-        // the outward normal at every point: perpendicular to the line, on the side away from the region
-        // (which side: a vote over the line, sampling the mask a little to one side)
-        const q = l.pts, m = q.length, nrm = [];
-        for (let i = 0; i < m; i++) {
-          const a = q[l.closed ? (i - 1 + m) % m : Math.max(0, i - 1)], b = q[l.closed ? (i + 1) % m : Math.min(m - 1, i + 1)];
-          const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
-          nrm.push([dy / len, -dx / len]);
-        }
-        let vote = 0;
-        for (let i = 0; i < m; i++) {
-          const x = Math.round(q[i][0] + nrm[i][0] * 0.8), y = Math.round(q[i][1] + nrm[i][1] * 0.8);
-          if (x >= 0 && y >= 0 && x < W && y < H) vote += mask[y * W + x] ? -1 : 1;
-        }
-        // objects should come out bigger: a small region's lines move away from it, a big one's (sky, ground,
-        // gravel ... with the objects as holes in it) move into it
-        const big = cnt[k] > W * H * P.edgeBig;
-        const sg = (vote >= 0 ? 1 : -1) * (big ? -1 : 1);
-        lines.push({ col, pts: q, nrm: nrm.map(([x, y]) => [x * sg, y * sg]), closed: l.closed });
-      }
-    }
-  }
+  // the outlines and the names (segdraw.js, shared with the camera's AI view)
+  const sd = P.color === 'confidence' ? { lines: [], labels: [] } : SegDraw.build(seg, { by: P.color === 'group' ? 'group' : 'class', blur: P.edgeBlur, smooth: P.edgeSmooth,
+    lines: P.outline, min: P.edgeMin, big: P.edgeBig, labels: P.labels, labelMin: P.labelMin, nameOf: P.color === 'group' ? (k) => GJA[k] : null });
+  const lines = sd.lines;
   const n = W * H, cls = [...area.keys()].filter((k) => area[k] > 0).sort((a, b) => area[b] - area[a]);
-  view = { c, lines, cls: cls.map((k) => ({ k, name: seg.names[k], g: SegNet.groupOf ? SegNet.groupOf[k] : 6, pct: area[k] / n, x: sx[k] / area[k], y: sy[k] / area[k] })) };
-  // legend
-  let html;
-  if (P.color === 'group') {
-    const gp = new Float64Array(7); for (const q of view.cls) gp[q.g] += q.pct;
-    html = GJA.map((nm, gi) => gp[gi] > 0 ? `<div><span class="sw" style="background:rgb(${GCOL[gi]})"></span>${nm} ${(gp[gi] * 100).toFixed(0)}%</div>` : '').join('');
-  } else if (P.color === 'class') {
-    html = view.cls.slice(0, 14).map((q) => `<div><span class="sw" style="background:rgb(${hue(q.k)})"></span>${q.name} ${(q.pct * 100).toFixed(1)}%</div>`).join('');
-  } else html = '<div><span class="sw" style="background:rgb(255,0,60)"></span>自信なし　<span class="sw" style="background:rgb(0,255,60)"></span>自信あり</div>';
-  $('legend').innerHTML = html;
+  view = { c, lines, labels: sd.labels, cls: cls.map((k) => ({ k, name: seg.names[k], g: SegNet.groupOf ? SegNet.groupOf[k] : 6, pct: area[k] / n, x: sx[k] / area[k], y: sy[k] / area[k] })) };
 }
 function frame() {
   frames++; const now = performance.now(); if (now - fpsT > 500) { fps = frames * 1000 / (now - fpsT); frames = 0; fpsT = now; }
@@ -184,40 +156,8 @@ function frame() {
     if (seg) {
       if (!view) buildView();
       if (P.fill || P.color === 'confidence' || !P.outline) { ctx.imageSmoothingEnabled = P.smooth; ctx.drawImage(view.c, layout.ox, layout.oy, layout.w, layout.h); ctx.imageSmoothingEnabled = true; }
-      if (view.lines.length) {
-        const dpr = Math.min(2, window.devicePixelRatio || 1), sx = layout.w / seg.W, sy = layout.h / seg.H;
-        const gw = P.edgeGrow * dpr;
-        ctx.save(); ctx.lineWidth = P.lineW * dpr; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-        for (const l of view.lines) {
-          if (l.pts.length < 2) continue;
-          // screen points, pushed outward along the normals
-          const q = l.pts.map((p, i) => [layout.ox + (p[0] + 0.5) * sx + l.nrm[i][0] * gw, layout.oy + (p[1] + 0.5) * sy + l.nrm[i][1] * gw]);
-          const X = (p) => p[0], Y = (p) => p[1];
-          ctx.strokeStyle = `rgb(${l.col})`; ctx.beginPath();
-          // quadratic curves through the midpoints of the polyline: no corners left
-          if (l.closed) {
-            const m0 = [(q[q.length - 1][0] + q[0][0]) / 2, (q[q.length - 1][1] + q[0][1]) / 2];
-            ctx.moveTo(X(m0), Y(m0));
-            for (let i = 0; i < q.length; i++) { const a = q[i], b = q[(i + 1) % q.length]; ctx.quadraticCurveTo(X(a), Y(a), (X(a) + X(b)) / 2, (Y(a) + Y(b)) / 2); }
-            ctx.closePath();
-          } else {
-            ctx.moveTo(X(q[0]), Y(q[0]));
-            for (let i = 1; i < q.length - 1; i++) { const a = q[i], b = q[i + 1]; ctx.quadraticCurveTo(X(a), Y(a), (X(a) + X(b)) / 2, (Y(a) + Y(b)) / 2); }
-            ctx.lineTo(X(q[q.length - 1]), Y(q[q.length - 1]));
-          }
-          ctx.stroke();
-        }
-        ctx.restore();
-      }
-      if (P.labels) {
-        const dpr = Math.min(2, window.devicePixelRatio || 1), fs = Math.round(11 * dpr);
-        ctx.font = `bold ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        for (const q of view.cls) {
-          if (q.pct < P.labelMin) continue;
-          const X = layout.ox + (q.x + 0.5) / seg.W * layout.w, Y = layout.oy + (q.y + 0.5) / seg.H * layout.h, tw = ctx.measureText(q.name).width + fs * 0.8;
-          ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(X - tw / 2, Y - fs * 0.75, tw, fs * 1.5); ctx.fillStyle = '#fff'; ctx.fillText(q.name, X, Y);
-        }
-      }
+      SegDraw.draw(ctx, view, { ox: layout.ox, oy: layout.oy, kx: layout.w / seg.W, ky: layout.h / seg.H },
+        { dpr: Math.min(2, window.devicePixelRatio || 1), grow: P.edgeGrow, lineW: P.lineW, labels: P.labels });
     }
   }
   const f = (v) => v == null ? '-' : v.toFixed(1);
@@ -232,6 +172,36 @@ function frame() {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// ---------------- recording
+let msgT = 0;
+function say(t, ms = 2200) { const m = $('msg'); m.textContent = t; m.style.opacity = 1; clearTimeout(msgT); msgT = setTimeout(() => (m.style.opacity = 0), ms); }
+function stamp() { const d = new Date(), p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; }
+async function shareOrSave(blob, name) {
+  const file = new File([blob], name, { type: blob.type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+let rec = null;
+$('rec').onclick = () => {
+  if (rec) { rec.stop(); return; }
+  if (!cv.captureStream || !window.MediaRecorder) { say('このブラウザは録画に対応していません'); return; }
+  const type = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find((t) => MediaRecorder.isTypeSupported(t)) || '';
+  const chunks = [];
+  rec = new MediaRecorder(cv.captureStream(30), type ? { mimeType: type, videoBitsPerSecond: 8e6 } : undefined);
+  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  rec.onstop = () => {
+    $('rec').classList.remove('on'); $('rec').textContent = '●';
+    const blob = new Blob(chunks, { type: rec.mimeType || type || 'video/webm' }); rec = null;
+    shareOrSave(blob, `segmentation_${stamp()}.${(blob.type.includes('mp4') ? 'mp4' : 'webm')}`);
+  };
+  rec.start(500);
+  $('rec').classList.add('on'); $('rec').textContent = '■'; say('録画中… もう一度押すと止まります');
+};
+if (document.fonts) document.fonts.load('800 16px "M PLUS Rounded 1c"').catch(() => {});
 
 // ---------------- knobs
 const gui = new lil.GUI({ title: 'セグメンテーション' });

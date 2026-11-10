@@ -6,6 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#5d9be8">
 <title>Cloud Faces</title>
+<link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@800&display=swap" rel="stylesheet">
 <style>
   :root { --ink: #1c2340; --sky: #5d9be8; --sky2: #cfe5ff; }
   html, body { margin: 0; height: 100%; background: #0d1220; overflow: hidden; touch-action: manipulation;
@@ -69,6 +70,7 @@
 <script src="../lib/doodle.js"></script>
 <script src="../lib/cloudfind.js"></script>
 <script src="../lib/segnet.js"></script>
+<script src="../lib/segdraw.js"></script>
 <script>
 // Cloud Faces: camera (or a photo) -> find the cloud bulges (cloudfind.js) several times a
 // second -> follow each bulge as a track -> doodle a cat / bear face on it (doodle.js).
@@ -85,7 +87,10 @@ const P = {
   blink: true, gaze: true,
   showMask: false,
   aiShow: true,       // AI mode: show every part the AI cut out, one colour each
-  aiSize: 256,        // AI mode: the long side of the picture the AI sees (smaller = faster, coarser)
+  aiSize: 448,        // AI mode: the long side of the picture the AI sees (smaller = faster, coarser)
+  aiUp: 2,            // AI mode: its output resolution: 1 = 1/8 of the input (blocky), 2 = 1/4, 4 = 1/2, 8 = 1/1
+  // AI mode, the view of what it saw (as seg.html): coloured outlines per class, smoothed, pushed outward
+  aiLineW: 2.5, aiEdgeBlur: 3, aiEdgeSmooth: 4, aiEdgeMin: 0.005, aiEdgeGrow: 4, aiEdgeBig: 0.07, aiLabels: true, aiLabelMin: 0.015,
   aiStats: true,      // AI mode: show how long each step of a recognition takes
   aiEvery: 0,         // AI mode: at least this many ms between two AI runs (the camera keeps running)
   aiGround: true,     // AI mode: no faces on the ground (grass, sand, road, water, ... as the AI sees it)
@@ -234,44 +239,24 @@ function drawOutlines(o) {
   det._ol.forEach((l, k) => Doodle.stroke(ctx, l.pts.map(([x, y]) => [view.ox + x * view.k, view.oy + y * view.k]), o,
     { width: P.outlineW, seed: 1000 + k, closed: l.closed }));
 }
+// the AI's labels at its own output size -> the W x H detection grid (nearest)
+function resampleSeg(r, W, H) {
+  const label = new Uint8Array(W * H), group = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) {
+    const yy = Math.min(r.H - 1, Math.floor((y + 0.5) / H * r.H));
+    for (let x = 0; x < W; x++) { const j = yy * r.W + Math.min(r.W - 1, Math.floor((x + 0.5) / W * r.W)); label[y * W + x] = r.label[j]; group[y * W + x] = r.group[j]; }
+  }
+  return { ...r, label, group, W, H };
+}
+// what the AI saw (as seg.html, segdraw.js): every class's edge in its colour, smoothed and pushed outward, the
+// backgrounds traced along the picture's border, the names inside their regions
 function drawParts() {
-  const W = ai.W, H = ai.H;
-  if (!ai.view) {
-    const c = document.createElement('canvas'); c.width = W; c.height = H;
-    const g = c.getContext('2d'), id = g.createImageData(W, H);
-    ai.parts.forEach((pt, k) => {
-      const hue = (k * 137.5) % 360, a = pt.kind === 'thing' ? 120 : 45;
-      const [r, gg, b] = hsl(hue, 0.75, 0.55);
-      for (let i = 0; i < W * H; i++) if (pt.mask[i]) {
-        if (pt.kind !== 'thing' && ((i % W) + Math.floor(i / W)) % 4) continue;   // sky / too big: hatched
-        id.data[i * 4] = r; id.data[i * 4 + 1] = gg; id.data[i * 4 + 2] = b; id.data[i * 4 + 3] = a;
-      }
-    });
-    g.putImageData(id, 0, 0);
-    ai.view = { c, lines: ai.parts.map((pt, k) => {
-      let a = 0, sx = 0, sy = 0; for (let i = 0; i < W * H; i++) if (pt.mask[i]) { a++; sx += i % W; sy += Math.floor(i / W); }
-      return { k, kind: pt.kind, name: pt.name, at: a ? [sx / a, sy / a] : null, ls: CloudFind.outlines({ w: W, h: H, mask: pt.mask }, { outlineMin: 4 }) };
-    }) };
-  }
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(ai.view.c, view.ox, view.oy, W * view.k, H * view.k);
-  ctx.imageSmoothingEnabled = true;
-  ctx.save(); ctx.lineWidth = 2 * Math.min(2, window.devicePixelRatio || 1); ctx.lineJoin = 'round';
-  for (const { k, kind, ls } of ai.view.lines) {
-    const [r, g, b] = hsl((k * 137.5) % 360, 0.85, 0.4);
-    ctx.strokeStyle = `rgba(${r},${g},${b},${kind === 'thing' ? 1 : 0.5})`;
-    for (const l of ls) { ctx.beginPath(); l.pts.forEach(([x, y], i) => { const X = view.ox + x * view.k, Y = view.oy + y * view.k; i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); if (l.closed) ctx.closePath(); ctx.stroke(); }
-  }
-  // what each part is (the AI's class name), at its middle
-  const fs = Math.round(11 * Math.min(2, window.devicePixelRatio || 1));
-  ctx.font = `bold ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  for (const { name, at } of ai.view.lines) {
-    if (!name || !at) continue;
-    const X = view.ox + at[0] * view.k, Y = view.oy + at[1] * view.k, tw = ctx.measureText(name).width + fs * 0.8;
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(X - tw / 2, Y - fs * 0.75, tw, fs * 1.5);
-    ctx.fillStyle = '#fff'; ctx.fillText(name, X, Y);
-  }
-  ctx.restore();
+  const sg = ai.segN;
+  if (!ai.view) ai.view = SegDraw.build(sg, { by: 'class', blur: P.aiEdgeBlur, smooth: P.aiEdgeSmooth, min: P.aiEdgeMin, big: P.aiEdgeBig,
+    labels: P.aiLabels, labelMin: P.aiLabelMin, nameOf: (k) => JA[sg.names[k]] || sg.names[k] });
+  const [sw, sh] = srcSize();
+  SegDraw.draw(ctx, ai.view, { ox: view.ox, oy: view.oy, kx: sw * view.s / sg.W, ky: sh * view.s / sg.H },
+    { dpr: Math.min(2, window.devicePixelRatio || 1), grow: P.aiEdgeGrow, lineW: P.aiLineW, labels: P.aiLabels });
 }
 function drawAiStats() {
   const q = ai.stat, f = (v) => v.toFixed(1), dpr = Math.min(2, window.devicePixelRatio || 1), fs = Math.round(11 * dpr);
@@ -316,7 +301,7 @@ function frame(now) {
     ctx.drawImage(source(), view.ox, view.oy, sw * view.s, sh * view.s);
     if (det) {
       if (P.showMask) drawMask();
-      if (ai.active && P.aiShow && ai.parts.length) drawParts();
+      if (ai.active && P.aiShow && ai.segN) drawParts();
       boilFrame = P.boil > 0 ? Math.floor(now / 1000 * P.boilFps) : 0;
       const o = style(), time = now / 1000;
       if (P.outline) drawOutlines(o);   // with the AI on: the clouds and things it kept
@@ -350,7 +335,10 @@ function aiOff() {
 const JA = { 'sky-other': '空', clouds: '雲', person: '人', tree: '木', bush: '茂み', 'building-other': '建物', house: '家', skyscraper: 'ビル',
   car: '車', bus: 'バス', truck: 'トラック', bicycle: '自転車', dog: '犬', cat: '猫', bird: '鳥', bench: 'ベンチ', fence: '柵', tent: 'テント',
   'playingfield': '広場', grass: '草', sand: '砂', dirt: '土', pavement: '舗道', road: '道', sea: '海', river: '川', mountain: '山', hill: '丘',
-  'wall-concrete': '壁', 'wall-other': '壁', roof: '屋根', bridge: '橋', umbrella: '傘', kite: '凧', flower: '花', 'plant-other': '植物', light: '照明' };
+  'wall-concrete': '壁', 'wall-other': '壁', roof: '屋根', bridge: '橋', umbrella: '傘', kite: '凧', flower: '花', 'plant-other': '植物', light: '照明',
+  gravel: '砂利', table: 'テーブル', keyboard: 'キーボード', chair: '椅子', 'floor-wood': '床', 'ground-other': '地面', 'building-other-merged': '建物' };
+// the names' rounded font: a canvas does not fetch a web font's Japanese part by itself, so ask for it with the names
+if (document.fonts) document.fonts.load('800 16px "M PLUS Rounded 1c"', Object.values(JA).join('') + 'abcdefghijklmnopqrstuvwxyz-').catch(() => {});
 // the AI button: on = the AI keeps running in the background on the live camera (or the photo); each result
 // (what is sky / clouds / ground / a thing) is used by the normal detection until the next one comes in
 async function aiRun() {
@@ -362,7 +350,7 @@ async function aiRun() {
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* not supported */ }
   try {
     if (!SegNet.ready) say('AI: はじめてなのでモデルをダウンロードします（約 7 MB、次からはいりません）', 4000);
-    await SegNet.load((t) => say(t, 60000));
+    await SegNet.load((t) => say(t, 60000), { up: P.aiUp });
     ai.active = true; ai.runs = 0; $('ai').classList.add('on');
     say('AI: オン（カメラはそのまま、裏で認識し続けます）', 2500);
     aiLoop();
@@ -384,14 +372,15 @@ async function aiLoop() {
         const k = Math.min(1, P.aiSize / Math.max(sw, sh)), c = ai.grab || (ai.grab = document.createElement('canvas'));
         c.width = Math.round(sw * k); c.height = Math.round(sh * k);
         c.getContext('2d').drawImage(source(), 0, 0, c.width, c.height);
-        const W = det.w, H = det.h, tr = performance.now(), seg = await SegNet.run(c, W, H, P.aiSize);
+        const W = det.w, H = det.h, tr = performance.now(), segN = await SegNet.run(c, 0, 0, P.aiSize), seg = resampleSeg(segN, W, H);
+        ai.segN = segN; ai.view = null;
         if (!ai.active) break;
         const tp = performance.now(); aiPrep(seg, W, H); lastImg = img; ai.runs++; ai.ms = seg.ms;
         const te = performance.now(), st = { grab: tr - tg, prep: seg.prep, infer: seg.ms, post: seg.post, faces: te - tp, total: te - tg, size: `${seg.w}x${seg.h}` };
         ai.stat = ai.stat ? Object.fromEntries(Object.entries(st).map(([k2, v]) => [k2, typeof v === 'number' ? ai.stat[k2] * 0.8 + v * 0.2 : v])) : st;
         ai.gap = ai.last ? ai.gap ? ai.gap * 0.8 + (te - ai.last) * 0.2 : te - ai.last : 0; ai.last = te;
         if (ai.runs === 1) say(`AI: 認識中（${SegNet.device === 'webgpu' ? 'GPU' : 'CPU'} 1回 ${Math.round(seg.ms)} ms）`, 2500);
-      } catch (e) { console.error(e); say('AI を使えませんでした: ' + (e.message || e), 4000); aiOff(); break; }
+      } catch (e) { if (!ai.active) break; console.error(e); say('AI を使えませんでした: ' + (e.message || e), 4000); aiOff(); break; }
     }
     // wait: the rest of aiEvery (0 = the next run right away)
     const dt = performance.now() - t0;
@@ -568,7 +557,13 @@ gd.add(P, 'detectFps', 2, 30, 1).name('検出の回数/秒');
 gd.add(P, 'showMask').name('雲マスク表示');
 gd.add(P, 'aiShow').name('AI: 切り分けた範囲を表示');
 gd.add(P, 'aiEvery', 0, 3000, 50).name('AI: 認識の間隔 (ms)');
-gd.add(P, 'aiSize', [256, 320, 384, 448, 512]).name('AI: 認識する画像の大きさ');
+gd.add(P, 'aiSize', [128, 160, 192, 224, 256, 320, 384, 448, 512, 640]).name('AI: 認識する画像の大きさ');
+gd.add(P, 'aiUp', { '1/8': 1, '1/4': 2, '1/2': 4, '1/1': 8 }).name('AI: 出力の解像度 (次に AI をオンにした時から)').onChange(() => { aiOff(); SegNet.reset(); });
+gd.add(P, 'aiLineW', 0.5, 8, 0.5).name('AI: 枠線の太さ');
+gd.add(P, 'aiEdgeBlur', 0, 4, 1).name('AI: 枠線のなめらかさ').onChange(() => (ai.view = null));
+gd.add(P, 'aiEdgeSmooth', 0, 5, 1).name('AI: 枠線の角の丸め').onChange(() => (ai.view = null));
+gd.add(P, 'aiEdgeGrow', -10, 20, 0.5).name('AI: 枠線を外に広げる (px)');
+gd.add(P, 'aiLabels').name('AI: 名前を表示');
 gd.add(P, 'aiStats').name('AI: 処理時間を表示');
 gd.add(P, 'aiGround').name('AI: 地面には顔を付けない');
 gc.close(); gp.close(); gd.close();
