@@ -85,7 +85,9 @@ const P = {
   blink: true, gaze: true,
   showMask: false,
   aiShow: true,       // AI mode: show every part the AI cut out, one colour each
-  aiEvery: 400,       // AI mode: at least this many ms between two AI runs (the camera keeps running)
+  aiSize: 256,        // AI mode: the long side of the picture the AI sees (smaller = faster, coarser)
+  aiStats: true,      // AI mode: show how long each step of a recognition takes
+  aiEvery: 0,         // AI mode: at least this many ms between two AI runs (the camera keeps running)
   aiGround: true,     // AI mode: no faces on the ground (grass, sand, road, water, ... as the AI sees it)
   outline: true, outlineW: 1.0,   // trace the clouds' edges with the pen
 };
@@ -265,6 +267,16 @@ function drawParts() {
   }
   ctx.restore();
 }
+function drawAiStats() {
+  const q = ai.stat, f = (v) => v.toFixed(1), dpr = Math.min(2, window.devicePixelRatio || 1), fs = Math.round(11 * dpr);
+  const lines = [`AI ${SegNet.device === 'webgpu' ? 'GPU' : 'CPU'}${SegNet.worker ? '・別スレッド' : ''} ${q.size}  1回 ${f(q.total)} ms / ${ai.gap ? (1000 / ai.gap).toFixed(1) : '-'} 回/秒`,
+    `取り込み ${f(q.grab)}  前処理 ${f(q.prep)}  推論 ${f(q.infer)}  後処理 ${f(q.post)}  顔 ${f(q.faces)}`];
+  ctx.save(); ctx.font = `${fs}px ui-monospace, Consolas, monospace`; ctx.textBaseline = 'top';
+  const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + fs, y0 = fs * 4.2;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(fs * 0.6, y0, w, fs * 2.9);
+  ctx.fillStyle = '#fff'; lines.forEach((l, i) => ctx.fillText(l, fs * 1.1, y0 + fs * 0.4 + i * fs * 1.3));
+  ctx.restore();
+}
 function hsl(h, s, l) {
   const f = (n) => { const k = (n + h / 30) % 12, a = s * Math.min(l, 1 - l); return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))); };
   return [f(0), f(8), f(4)];
@@ -302,6 +314,7 @@ function frame(now) {
       boilFrame = P.boil > 0 ? Math.floor(now / 1000 * P.boilFps) : 0;
       const o = style(), time = now / 1000;
       if (P.outline) drawOutlines(o);   // with the AI on: the clouds and things it kept
+      if (ai.active && P.aiStats && ai.stat) drawAiStats();
       for (const t of tracks) {
         const target = t.hits >= 3 && t.miss < 0.3 ? 1 : t.miss >= 0.3 ? 0 : t.alpha;
         t.alpha += (target - t.alpha) * Math.min(1, dt * 5);
@@ -361,18 +374,22 @@ async function aiLoop() {
     const [sw, sh] = srcSize();
     if (det && sw && !(mode === 'photo' && lastImg === img && ai.ctx)) {   // a still photo: once is enough
       try {
-        const k = Math.min(1, 512 / Math.max(sw, sh)), c = document.createElement('canvas');
+        const tg = performance.now();
+        const k = Math.min(1, P.aiSize / Math.max(sw, sh)), c = ai.grab || (ai.grab = document.createElement('canvas'));
         c.width = Math.round(sw * k); c.height = Math.round(sh * k);
         c.getContext('2d').drawImage(source(), 0, 0, c.width, c.height);
-        const W = det.w, H = det.h, seg = await SegNet.run(c, W, H);
+        const W = det.w, H = det.h, tr = performance.now(), seg = await SegNet.run(c, W, H, P.aiSize);
         if (!ai.active) break;
-        aiPrep(seg, W, H); lastImg = img; ai.runs++; ai.ms = seg.ms;
+        const tp = performance.now(); aiPrep(seg, W, H); lastImg = img; ai.runs++; ai.ms = seg.ms;
+        const te = performance.now(), st = { grab: tr - tg, prep: seg.prep, infer: seg.ms, post: seg.post, faces: te - tp, total: te - tg, size: `${seg.w}x${seg.h}` };
+        ai.stat = ai.stat ? Object.fromEntries(Object.entries(st).map(([k2, v]) => [k2, typeof v === 'number' ? ai.stat[k2] * 0.8 + v * 0.2 : v])) : st;
+        ai.gap = ai.last ? ai.gap ? ai.gap * 0.8 + (te - ai.last) * 0.2 : te - ai.last : 0; ai.last = te;
         if (ai.runs === 1) say(`AI: 認識中（${SegNet.device === 'webgpu' ? 'GPU' : 'CPU'} 1回 ${Math.round(seg.ms)} ms）`, 2500);
       } catch (e) { console.error(e); say('AI を使えませんでした: ' + (e.message || e), 4000); aiOff(); break; }
     }
-    // wait: at least aiEvery, and at least as long as the run took (slow phones run it less often)
+    // wait: the rest of aiEvery (0 = the next run right away)
     const dt = performance.now() - t0;
-    await new Promise((r) => setTimeout(r, Math.max(P.aiEvery - dt, dt * 0.5, 30)));
+    await new Promise((r) => setTimeout(r, Math.max(P.aiEvery - dt, 0)));
   }
 }
 // one AI result -> what the detection needs until the next one: the sky (a little wider, so the cloud edges are
@@ -390,10 +407,13 @@ function aiPrep(seg, W, H) {
   if (P.aiGround) parts.push({ mask: gm, kind: 'ground', name: '地面' });
   const things = [], thingMask = new Uint8Array(n), names = [];
   const area = new Int32Array(seg.names.length); for (let i = 0; i < n; i++) area[seg.label[i]]++;
-  for (let cl = 0; cl < seg.names.length; cl++) {
-    if (area[cl] < n * 0.012) continue;
+  // the biggest few kinds of thing only (each costs a shape analysis)
+  const order = [...area.keys()].filter((cl) => {
+    if (area[cl] < n * 0.012) return false;
     const gg = grp[seg.label.indexOf(cl)];
-    if (gg === Gs.SKY || gg === Gs.CLOUDS || (gg === Gs.GROUND && P.aiGround)) continue;
+    return !(gg === Gs.SKY || gg === Gs.CLOUDS || (gg === Gs.GROUND && P.aiGround));
+  }).sort((a, b) => area[b] - area[a]).slice(0, 4);
+  for (const cl of order) {
     const m = new Uint8Array(n); for (let i = 0; i < n; i++) m[i] = seg.label[i] === cl ? 1 : 0;
     const nm = seg.names[cl], ja = JA[nm] || nm.replace(/-other|-merged/, '');
     parts.push({ mask: m, kind: 'thing', name: ja }); names.push(ja);
@@ -541,7 +561,9 @@ gd.add(P, 'follow', 0.05, 1, 0.01).name('追いかける速さ');
 gd.add(P, 'detectFps', 2, 30, 1).name('検出の回数/秒');
 gd.add(P, 'showMask').name('雲マスク表示');
 gd.add(P, 'aiShow').name('AI: 切り分けた範囲を表示');
-gd.add(P, 'aiEvery', 100, 3000, 50).name('AI: 認識の間隔 (ms)');
+gd.add(P, 'aiEvery', 0, 3000, 50).name('AI: 認識の間隔 (ms)');
+gd.add(P, 'aiSize', [256, 320, 384, 448, 512]).name('AI: 認識する画像の大きさ');
+gd.add(P, 'aiStats').name('AI: 処理時間を表示');
 gd.add(P, 'aiGround').name('AI: 地面には顔を付けない');
 gc.close(); gp.close(); gd.close();
 </script>
