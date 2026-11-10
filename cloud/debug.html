@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cloud Animals - デバッグ</title>
+<style>
+  :root { --ink: #1c2340; --sub: #5a6580; --bg: #eef3f8; --card: #fff; --ok: #1f9d55; --ng: #c8344a; --hit: #fff4c2; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.55 system-ui, "Hiragino Sans", "Yu Gothic", sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--ink); color: #fff; padding: 8px 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  header b { margin-right: 10px; }
+  header button { background: #ffffff22; color: #fff; border: 0; border-radius: 16px; padding: 6px 14px; font: inherit; cursor: pointer; }
+  header button.on { background: #fff; color: var(--ink); font-weight: 700; }
+  main { padding: 14px; max-width: 1400px; margin: 0 auto; }
+  section { display: none; } section.on { display: block; }
+  h2 { font-size: 18px; margin: 18px 0 6px; } h3 { font-size: 15px; margin: 14px 0 4px; }
+  .hint { color: var(--sub); font-size: 13px; }
+  .card { background: var(--card); border-radius: 12px; padding: 12px 14px; margin: 10px 0; box-shadow: 0 1px 3px #0001; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
+  .tile { background: var(--card); border-radius: 10px; padding: 6px; text-align: center; box-shadow: 0 1px 3px #0001; }
+  .tile canvas { display: block; border-radius: 8px; }
+  .id { font: 12px ui-monospace, Consolas, monospace; color: var(--sub); user-select: all; }
+  code, .mono { font: 12px ui-monospace, Consolas, monospace; background: #eef1f6; padding: 1px 5px; border-radius: 4px; user-select: all; }
+  table { border-collapse: collapse; width: 100%; } td, th { padding: 4px 8px; border-bottom: 1px solid #e6eaf0; text-align: left; vertical-align: top; }
+  th { font-size: 12px; color: var(--sub); font-weight: 600; }
+  .ok { color: var(--ok); font-weight: 700; } .ng { color: var(--ng); font-weight: 700; }
+  tr.hit td { background: var(--hit); }
+  input[type=range] { width: 160px; vertical-align: middle; }
+  .num { font: 12px ui-monospace, Consolas, monospace; display: inline-block; min-width: 46px; }
+  .changed { background: #ffe3a3 !important; }
+  .kindbadge { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #dfe8f6; font-weight: 700; }
+  #photoWrap { position: sticky; top: 56px; flex: 0 1 520px; max-width: 100%; }
+  #photoCv { width: 100%; height: auto; border-radius: 10px; cursor: pointer; display: block; }
+  @media (max-width: 900px) { #photoWrap { position: static; flex-basis: 100%; } }
+  .facecard { border-left: 5px solid transparent; }
+  .facecard.sel { border-left-color: #f0a500; }
+  textarea { width: 100%; height: 110px; font: 12px ui-monospace, Consolas, monospace; }
+  .ctl { display: grid; grid-template-columns: 170px 170px 60px auto; gap: 4px 10px; align-items: center; }
+  .ctl label { font-weight: 600; }
+  @media (max-width: 700px) { .ctl { grid-template-columns: 1fr 1fr 50px; } .ctl .hint { grid-column: 1 / -1; } }
+</style>
+</head>
+<body>
+<header>
+  <b>雲の動物 デバッグ</b>
+  <button data-tab="faces" class="on">① 顔の一覧</button>
+  <button data-tab="rules">② 形 → 動物のルール</button>
+  <button data-tab="photo">③ 写真で試す</button>
+  <button data-tab="share">④ 指示の出し方 / 設定の書き出し</button>
+</header>
+<main>
+
+<!-- ① faces -->
+<section id="faces" class="on">
+  <p class="hint">それぞれの顔に <span class="mono">ID</span> が付いています（例 <span class="mono">cat/smile</span>）。「<span class="mono">bear/happy</span> の目をもう少し大きく」のように ID で指示してもらえると、どの顔の話かがはっきりします。下のつまみは全部の顔に効く共通の設定で、動かすとすぐ描き直します（カメラ本体の設定は変わりません）。</p>
+  <div class="card"><div class="ctl" id="faceCtl"></div></div>
+  <div id="faceRows"></div>
+</section>
+
+<!-- ② rules -->
+<section id="rules">
+  <p class="hint">雲 1 つごとに、形の特徴（細長さ・大きさ・曲がりなど）を測り、<b>上から順に</b>ルールを確かめます。<b>条件が全部合った最初のルール</b>の動物になります。しきい値のつまみを動かすと、③ の写真の結果にもすぐ反映されます。</p>
+  <div id="ruleList"></div>
+  <h2>形の特徴（測っているもの）</h2>
+  <div class="card"><table id="featTable"></table></div>
+  <h2>そのほかのルール</h2>
+  <div class="card" id="otherRules"></div>
+</section>
+
+<!-- ③ photo -->
+<section id="photo">
+  <div class="card row" style="align-items:center">
+    <label>写真 <select id="photoSel"></select></label>
+    <label>または <input type="file" id="photoFile" accept="image/*"></label>
+    <label><input type="checkbox" id="showMask"> 雲マスクを表示</label>
+    <span class="hint">顔か雲をクリックすると、その顔がなぜその動物になったかを下に表示します。</span>
+  </div>
+  <div class="row">
+    <div id="photoWrap"><canvas id="photoCv"></canvas></div>
+    <div style="flex:1;min-width:320px" id="faceCards"></div>
+  </div>
+</section>
+
+<!-- ④ share -->
+<section id="share">
+  <div class="card">
+    <h3>指示の出し方の例</h3>
+    <ul>
+      <li><b>顔：</b>「<span class="mono">cat/pokan</span> の口をもっと小さく」「<span class="mono">sheep</span> 全部、ほっぺを濃く」「<span class="mono">fish/smile</span> の目を丸く」</li>
+      <li><b>ルール：</b>「ルール <span class="mono">R5 bear</span> の細長さ 1.6 を 1.8 に」「<span class="mono">clouds18.jpg</span> の顔 #3 はヘビじゃなくてイルカにしたい」</li>
+      <li><b>写真：</b>③ で写真を選んで顔をクリックし、出てきた理由のカードをスクリーンショットで送ってもらうのが一番早いです。</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>変えた設定（そのまま貼り付けて送れます）</h3>
+    <p class="hint">① と ② のつまみで、初期値から変えたものだけを書き出します。</p>
+    <textarea id="diffOut" readonly></textarea>
+    <p><button id="copyBtn">コピー</button> <button id="resetBtn">全部初期値に戻す</button></p>
+  </div>
+</section>
+</main>
+
+<script src="../lib/doodle.js"></script>
+<script src="../lib/cloudfind.js"></script>
+<script>
+// Debug page: the faces (every animal x every expression, with IDs), the shape -> animal rules (CloudFind.RULES,
+// thresholds tunable) and a photo view showing, for every face, the measured features and each rule's checks.
+// Settings are kept in localStorage ('cloudDebug') and can be exported as the changes from the defaults.
+const { KINDS, EXPRS } = Doodle;
+const JA = { cat: 'ネコ', bear: 'クマ', snake: 'ヘビ', fish: 'サカナ', dolphin: 'イルカ', bird: 'トリ', bat: 'コウモリ', sheep: 'ヒツジ', whale: 'クジラ', peek: 'のぞく', plain: 'まる' };
+const EXJA = { pokan: 'ぽかん', sleepy: 'ねむい', smile: 'にっこり', happy: 'うれしい', smug: 'したり顔' };
+// the camera's detection defaults (cloud_cam.html) + the face style
+const DET = { detW: 180, blur: 2, thrBias: 0.0, minR: 0.03, minFace: 0.07, maxR: 0.22, maxFaces: 6, sep: 1.15, faceUp: 0.6, faceScale: 1.0, arms: true };
+const FACE0 = { eyeSize: 1.2, eyeGap: 1.0, earSize: 0.8, blush: 0.25, lineW: 2.4, boil: 1.0, ears: true, whiskers: true, paws: true, snakeBody: false };
+const FACE_UI = [
+  ['eyeSize', '目の大きさ', 0.5, 1.8, 0.01], ['eyeGap', '目の間隔', 0.6, 1.5, 0.01], ['earSize', '耳の大きさ', 0.4, 2, 0.01],
+  ['blush', 'ほっぺの濃さ', 0, 1, 0.01], ['lineW', '線の太さ', 0.5, 6, 0.1], ['boil', '手描きの揺れ', 0, 3, 0.05],
+  ['ears', '耳'], ['whiskers', 'ヒゲ'], ['paws', '手足'], ['snakeBody', 'ヘビの体の線'],
+];
+const RULE0 = {}; for (const r of CloudFind.RULES) for (const c of r.conds) if (c.p) RULE0[c.p] = c.d;
+const OTHER0 = { holeMin: 0.008, holeMax: 0.06, peekMin: 0.9, whaleCover: 0.45 };
+const S = { face: { ...FACE0 }, rule: { ...RULE0 }, other: { ...OTHER0 } };
+try { const sv = JSON.parse(localStorage.getItem('cloudDebug') || '{}'); for (const k of ['face', 'rule', 'other']) Object.assign(S[k], sv[k] || {}); } catch (e) { /* none */ }
+const save = () => { localStorage.setItem('cloudDebug', JSON.stringify(S)); writeDiff(); };
+const style = () => ({ ink: '#1c2340', lineW: S.face.lineW, boil: S.face.boil, boilFrame: 0, eyeSize: S.face.eyeSize, eyeGap: S.face.eyeGap,
+  earSize: S.face.earSize, ears: S.face.ears, whiskers: S.face.whiskers, paws: S.face.paws, blush: S.face.blush, dpr: 1, gaze: false, blink: false, snakeBody: S.face.snakeBody });
+const opts = () => ({ ...DET, ...S.rule, ...S.other });
+
+// ---------------- tabs
+document.querySelectorAll('header button').forEach((b) => b.onclick = () => {
+  document.querySelectorAll('header button').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('section').forEach((s) => s.classList.toggle('on', s.id === b.dataset.tab));
+  if (b.dataset.tab === 'photo') drawPhoto();
+});
+
+// a slider / checkbox row in a .ctl grid; onChange after every move
+function control(box, obj, key, label, min, max, step, def, note, onChange) {
+  const isBool = typeof obj[key] === 'boolean';
+  const l = document.createElement('label'); l.textContent = label;
+  const inp = document.createElement('input'); const num = document.createElement('span'); num.className = 'num';
+  const mark = () => { const ch = obj[key] !== def; l.classList.toggle('changed', ch); num.textContent = isBool ? '' : (+obj[key]).toFixed(step < 0.01 ? 3 : 2); };
+  if (isBool) { inp.type = 'checkbox'; inp.checked = obj[key]; inp.onchange = () => { obj[key] = inp.checked; mark(); save(); onChange(); }; }
+  else { inp.type = 'range'; inp.min = min; inp.max = max; inp.step = step; inp.value = obj[key]; inp.oninput = () => { obj[key] = +inp.value; mark(); save(); onChange(); }; }
+  const n2 = document.createElement('span'); n2.className = 'hint'; n2.innerHTML = note || (isBool ? '' : `初期値 ${def}`);
+  box.append(l, inp, num, n2); mark();
+  return inp;
+}
+
+// ---------------- ① the faces: each animal on a made-up cloud of its shape, every expression
+const T = 170, G = 100;
+const TILES = {
+  cat: { cloud: [[0.5, 0.55, 0.2], [0.36, 0.6, 0.13], [0.64, 0.6, 0.13], [0.5, 0.42, 0.13]], face: [0.5, 0.56, 0.16], ears: true },
+  bear: { cloud: [[0.47, 0.52, 0.24], [0.76, 0.66, 0.09], [0.68, 0.62, 0.08]], face: [0.45, 0.53, 0.17], ears: true, arm: [0.8, 0.68] },
+  snake: { cloud: [...Array(16)].map((_, i) => [0.17 + i * 0.05, 0.55 + Math.sin(i * 0.5) * 0.09, (i < 2 ? 0.11 : 0.085) - i * 0.0028]), face: [0.17, 0.54, 0.12] },
+  fish: { cloud: [[0.38, 0.52, 0.17], [0.55, 0.52, 0.15], [0.7, 0.52, 0.11], [0.8, 0.52, 0.07]], face: [0.34, 0.52, 0.13], tail: [0.84, 0.52, 1, 0], body: [0.22, 0.86, 0.52] },
+  dolphin: { cloud: [[0.3, 0.6, 0.12], [0.42, 0.5, 0.13], [0.56, 0.47, 0.12], [0.69, 0.52, 0.1], [0.79, 0.6, 0.07]], face: [0.4, 0.52, 0.12], tail: [0.82, 0.64, 0.6, 0.8] },
+  bird: { cloud: [[0.5, 0.56, 0.15], [0.32, 0.53, 0.08], [0.68, 0.53, 0.08], [0.2, 0.5, 0.05], [0.8, 0.5, 0.05]], face: [0.5, 0.57, 0.12], wings: [[0.16, 0.5], [0.84, 0.5]], feet: true },
+  bat: { cloud: [[0.5, 0.6, 0.13], [0.33, 0.52, 0.08], [0.67, 0.52, 0.08], [0.2, 0.42, 0.06], [0.8, 0.42, 0.06]], face: [0.5, 0.6, 0.11], wings: [[0.16, 0.42], [0.84, 0.42]] },
+  sheep: { cloud: [[0.5, 0.5, 0.14], [0.37, 0.53, 0.1], [0.63, 0.53, 0.1], [0.43, 0.4, 0.09], [0.58, 0.4, 0.09]], face: [0.5, 0.49, 0.14], feet: true },
+  whale: { cloud: [[0.5, 0.55, 0.36], [0.2, 0.4, 0.2], [0.8, 0.4, 0.2]], face: [0.45, 0.58, 0.16] },
+  peek: { cloud: [[0.5, 0.5, 0.36], [0.22, 0.45, 0.2], [0.78, 0.45, 0.2]], holes: [[0.5, 0.52, 0.15], [0.62, 0.47, 0.08], [0.4, 0.6, 0.07]], face: [0.5, 0.52, 0.15], hole: true },
+  plain: { cloud: [[0.5, 0.55, 0.2], [0.36, 0.6, 0.13], [0.64, 0.6, 0.13], [0.5, 0.42, 0.13]], face: [0.5, 0.56, 0.16] },
+};
+function drawTile(cv, kind, expr, seed) {
+  const t = TILES[kind], ctx = cv.getContext('2d'); cv.width = cv.height = T;
+  const gr = ctx.createLinearGradient(0, 0, 0, T); gr.addColorStop(0, '#5b8fd8'); gr.addColorStop(1, '#a9c8ee'); ctx.fillStyle = gr; ctx.fillRect(0, 0, T, T);
+  const inside = (u, v) => t.cloud.some(([x, y, r]) => (u - x) ** 2 + (v - y) ** 2 < r * r) && !(t.holes || []).some(([x, y, r]) => (u - x) ** 2 + (v - y) ** 2 < r * r);
+  const mask = new Uint8Array(G * G); for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) mask[y * G + x] = inside((x + 0.5) / G, (y + 0.5) / G) ? 1 : 0;
+  const m = document.createElement('canvas'); m.width = m.height = G; const mc = m.getContext('2d'), id = mc.createImageData(G, G);
+  for (let i = 0; i < G * G; i++) { id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = 250; id.data[i * 4 + 3] = mask[i] ? 235 : 0; }
+  mc.putImageData(id, 0, 0); ctx.filter = 'blur(2px)'; ctx.drawImage(m, 0, 0, T, T); ctx.filter = 'none';
+  const q = T / G, O = style();
+  CloudFind.outlines({ w: G, h: G, mask }, { outlineMin: 4 }).forEach((l, j) => Doodle.stroke(ctx, l.pts.map(([x, y]) => [x * q, y * q]), O, { seed: 900 + j, closed: l.closed, width: 0.8 }));
+  const [fx, fy, fu] = t.face, X = fx * T, Y = fy * T, U = fu * T, P = (u, v) => ({ x: u * T, y: v * T });
+  const d = { kind, expr, seed, alpha: 1, x: X, y: Y, U, pupil: 0.56, gx: 0, gy: 0, blinkT: -1, rot: 0 };
+  if (t.ears) d.ears = [-1, 1].map((s) => { const a = 30 * Math.PI / 180, nx = s * Math.sin(a), ny = -Math.cos(a); return { x: X + nx * U * 0.95, y: Y + ny * U * 0.95, nx, ny }; });
+  if (t.feet || kind === 'bear') d.paws = [-1, 1].map((s) => { const a = 28 * Math.PI / 180; return { x: X + s * Math.sin(a) * U * 1.05, y: Y + Math.cos(a) * U * 1.05 }; });
+  if (t.arm) { const h = P(...t.arm), dx = h.x - X, dy = h.y - Y, l = Math.hypot(dx, dy); d.arms = [{ sx: X + dx / l * U * 0.8, sy: Y + dy / l * U * 0.8, x: h.x, y: h.y }]; }
+  if (t.tail) { const [u, v, dx, dy] = t.tail, l = Math.hypot(dx, dy); d.tail = { ...P(u, v), dx: dx / l, dy: dy / l }; }
+  if (t.wings) d.wings = t.wings.map(([u, v]) => P(u, v));
+  if (t.hole) {
+    d.hole = { rx: 1, ry: 1 };
+    const hm = new Uint8Array(G * G); for (let i = 0; i < G * G; i++) hm[i] = !mask[i] && t.cloud.some(([x, y, r]) => ((i % G + 0.5) / G - x) ** 2 + ((Math.floor(i / G) + 0.5) / G - y) ** 2 < r * r) ? 1 : 0;
+    const ol = CloudFind.outlines({ w: G, h: G, mask: hm }, { outlineMin: 2 }).sort((a, b) => b.len - a.len)[0];
+    if (ol) d.holePoly = ol.pts.map(([x, y]) => ({ x: x * q, y: y * q }));
+  }
+  if (t.body) { const [u0, u1, v] = t.body; d.body = []; for (let u = u0; u <= u1; u += 0.02) { const hh = Math.max(0, ...t.cloud.map(([x, y, r]) => r * r > (u - x) ** 2 ? Math.sqrt(r * r - (u - x) ** 2) : 0)); d.body.push({ x: u * T, y: v * T, half: Math.max(2, hh * T) }); } }
+  Doodle.draw(ctx, d, O);
+}
+function buildFaces() {
+  const box = document.getElementById('faceRows'); box.innerHTML = '';
+  KINDS.forEach((kind, ki) => {
+    const rule = CloudFind.RULES.find((r) => r.kind === kind);
+    const card = document.createElement('div'); card.className = 'card';
+    card.innerHTML = `<h3>${JA[kind] || kind} <span class="mono">${kind}</span> <span class="hint">— ${kind === 'peek' ? '雲に開いた丸い穴（② のそのほかのルール）' : kind === 'plain' ? '手動で選んだときだけ（自動では使いません）' : rule ? 'ルール ' + rule.text : ''}</span></h3>`;
+    const row = document.createElement('div'); row.className = 'row';
+    EXPRS.forEach((ex) => {
+      const tl = document.createElement('div'); tl.className = 'tile';
+      const cv = document.createElement('canvas'); drawTile(cv, kind, ex, 40 + ki * 97);
+      tl.append(cv); tl.insertAdjacentHTML('beforeend', `<div>${EXJA[ex]}</div><div class="id">${kind}/${ex}</div>`); row.append(tl);
+    });
+    card.append(row); box.append(card);
+  });
+}
+{
+  const box = document.getElementById('faceCtl');
+  for (const [k, label, a, b, st] of FACE_UI) control(box, S.face, k, label, a, b, st, FACE0[k], '', () => { buildFaces(); if (img) drawPhoto(); });
+}
+
+// ---------------- ② the rules
+const fmt = (v) => typeof v === 'boolean' ? (v ? 'はい' : 'いいえ') : (+v).toFixed(Math.abs(v) < 0.1 ? 3 : 2);
+const opJa = { '>': 'より大きい', '>=': '以上', '<': 'より小さい', is: '' };
+function buildRules() {
+  const box = document.getElementById('ruleList'); box.innerHTML = '';
+  CloudFind.RULES.forEach((r, k) => {
+    const card = document.createElement('div'); card.className = 'card';
+    card.innerHTML = `<h3><span class="mono">R${k + 1} ${r.kind}</span> ${JA[r.kind]} — ${r.text}</h3>`;
+    const ctl = document.createElement('div'); ctl.className = 'ctl';
+    if (!r.conds.length) ctl.innerHTML = '<span class="hint" style="grid-column:1/-1">条件なし（最後の受け皿）</span>';
+    const seen = new Set();
+    for (const c of r.conds) {
+      const f = CloudFind.FEATS[c.f];
+      if (c.op === 'is') { ctl.insertAdjacentHTML('beforeend', `<label>${f.ja}</label><span>であること</span><span></span><span class="hint">${f.note}</span>`); continue; }
+      if (seen.has(c.p)) { ctl.insertAdjacentHTML('beforeend', `<label>${f.ja}</label><span class="hint">が ${opJa[c.op]}（上と同じしきい値 <span class="mono">${c.p}</span>）</span><span></span><span></span>`); continue; }
+      seen.add(c.p);
+      const range = { elong: [1, 6, 0.05], lenW: [0, 1, 0.01], area: [0, 0.6, 0.001], nSmall: [1, 12, 1], midThick: [1, 4, 0.05], endsUp: [-0.3, 0.5, 0.01], bend: [0, 0.5, 0.01], fill: [0.3, 1.2, 0.01] }[c.f];
+      control(ctl, S.rule, c.p, `${f.ja} が ${opJa[c.op]}`, range[0], range[1], range[2], c.d, `<span class="mono">${c.p}</span>（初期値 ${c.d}）— ${f.note}`, () => { if (img) placeFaces(); });
+    }
+    card.append(ctl); box.append(card);
+  });
+  const ft = document.getElementById('featTable');
+  ft.innerHTML = '<tr><th>特徴</th><th>名前</th><th>意味</th></tr>' + Object.entries(CloudFind.FEATS).map(([k, f]) => `<tr><td><b>${f.ja}</b></td><td class="mono">${k}</td><td>${f.note}</td></tr>`).join('');
+  const ob = document.getElementById('otherRules'); ob.innerHTML = `
+    <p><b>のぞく（peek）：</b>雲の中に、ふちが全部その雲で囲まれた丸い穴（青空）があると、どのルールより先に「のぞく目」になります。その雲には他の顔は付きません。</p>
+    <div class="ctl" id="peekCtl"></div>
+    <p><b>曇り空のクジラ：</b>形が測れない（雲が画面いっぱい）ときに、雲が画面のこの割合以上を覆っていればクジラ 1 匹にします。</p>
+    <div class="ctl" id="overcastCtl"></div>
+    <p><b>1 つの雲に 1 匹：</b>ヘビ・クジラ・のぞくは、その雲を独り占めします。クジラは画面に 1 匹だけです。</p>
+    <p><b>付けられないときはネコ：</b>サカナ・ヘビの体が短すぎる、トリ・コウモリの翼が顔に近すぎる、イルカ・サカナの尾が顔に近すぎる、ときはネコに変わります（③ に「→ ネコに変更」と出ます）。</p>
+    <p><b>顔の数：</b>画面全体で最大 ${DET.maxFaces} 匹。大きい雲から順に付け、近すぎる顔は付けません。小さすぎる顔（いちばん大きい顔の 45% 未満）は消します（ヒツジの群れとのぞくは別）。</p>`;
+  const pc = document.getElementById('peekCtl'), oc = document.getElementById('overcastCtl'), re = () => { if (img) placeFaces(); };
+  control(pc, S.other, 'holeMin', '穴の大きさ（最小）', 0, 0.05, 0.001, OTHER0.holeMin, '<span class="mono">holeMin</span> 穴の面積 ÷ 画面', re);
+  control(pc, S.other, 'holeMax', '穴の大きさ（最大）', 0.01, 0.2, 0.001, OTHER0.holeMax, '<span class="mono">holeMax</span>', re);
+  control(pc, S.other, 'peekMin', '穴の半径（顔の最小に対して）', 0.3, 2, 0.05, OTHER0.peekMin, '<span class="mono">peekMin</span>', re);
+  control(oc, S.other, 'whaleCover', '雲の覆う割合', 0.1, 0.9, 0.01, OTHER0.whaleCover, '<span class="mono">whaleCover</span>', re);
+}
+
+// ---------------- ③ the photo
+const PHOTOS = ['clouds.jpg', ...[...Array(21)].map((_, i) => `clouds${i + 2}.jpg`)];
+const sel = document.getElementById('photoSel');
+sel.innerHTML = PHOTOS.map((f) => `<option>${f}</option>`).join('');
+let img = null, det = null, faces = [], selFace = -1;
+const pcv = document.getElementById('photoCv'), pctx = pcv.getContext('2d');
+function loadPhoto(url) {
+  const im = new Image(); im.onload = () => { img = im; det = CloudFind.analyse(img, img.width, img.height, opts()); placeFaces(); };
+  // no sample photos here (the public page): pick one from the device instead
+  im.onerror = () => { sel.parentElement.style.display = 'none'; document.getElementById('faceCards').innerHTML = '<div class="card">「ファイルを選択」で雲の写真を選んでください（写真はこの端末の中だけで使い、どこにも送りません）。</div>'; };
+  im.src = url;
+}
+sel.onchange = () => loadPhoto('photos/' + sel.value);
+document.getElementById('photoFile').onchange = (e) => { const f = e.target.files[0]; if (f) loadPhoto(URL.createObjectURL(f)); };
+document.getElementById('showMask').onchange = () => drawPhoto();
+function placeFaces() {
+  faces = CloudFind.find(det, opts()); selFace = -1;
+  det._ol = CloudFind.outlines(det, {}); drawPhoto(); listFaces();
+}
+let vk = 1;
+function drawPhoto() {
+  if (!img || !det) return;
+  const W = Math.min(900, img.width), k = W / img.width; pcv.width = W; pcv.height = Math.round(img.height * k); vk = W / det.w;
+  pctx.drawImage(img, 0, 0, pcv.width, pcv.height);
+  const toS = (x, y) => [x * vk, y * vk], O = style();
+  if (document.getElementById('showMask').checked) {
+    const m = document.createElement('canvas'); m.width = det.w; m.height = det.h; const mc = m.getContext('2d'), id = mc.createImageData(det.w, det.h);
+    for (let i = 0; i < det.w * det.h; i++) { id.data[i * 4] = 255; id.data[i * 4 + 1] = 60; id.data[i * 4 + 2] = 160; id.data[i * 4 + 3] = det.mask[i] ? 110 : 0; }
+    mc.putImageData(id, 0, 0); pctx.imageSmoothingEnabled = false; pctx.drawImage(m, 0, 0, pcv.width, pcv.height); pctx.imageSmoothingEnabled = true;
+  }
+  det._ol.forEach((l, j) => Doodle.stroke(pctx, l.pts.map(([x, y]) => toS(x, y)), O, { seed: 1000 + j, closed: l.closed, width: 1 }));
+  faces.forEach((f, i) => {
+    const [x, y] = toS(f.fx, f.fy), U = f.r * DET.faceScale * vk, mp = (a) => a && a.map((q) => { const [X, Y] = toS(q.x, q.y); return { ...q, x: X, y: Y }; });
+    const d = { kind: f.hint || 'cat', expr: 'smile', seed: 300 + i * 71, alpha: 1, x, y, U, pupil: 0.55, gx: 0, gy: 0, blinkT: -1, rot: 0,
+      ears: mp(f.ears), paws: mp(f.paws), wings: mp(f.wings), holePoly: mp(f.holePoly), hole: f.hole,
+      arms: f.arms && f.arms.map((a) => { const [x0, y0] = toS(a.sx, a.sy), [x1, y1] = toS(a.x, a.y); return { sx: x0, sy: y0, x: x1, y: y1 }; }),
+      body: f.body && f.body.map((q) => { const [X, Y] = toS(q.x, q.y); return { x: X, y: Y, half: q.half * vk }; }),
+      tail: f.tail && (() => { const [X, Y] = toS(f.tail.x, f.tail.y); return { x: X, y: Y, dx: f.tail.dx, dy: f.tail.dy }; })() };
+    Doodle.draw(pctx, d, O);
+    // the number tag
+    pctx.save(); pctx.font = 'bold 15px system-ui'; pctx.textAlign = 'center'; pctx.textBaseline = 'middle';
+    const tx = x + U * 0.95, ty = y - U * 0.95;
+    pctx.fillStyle = i === selFace ? '#f0a500' : '#1c2340'; pctx.beginPath(); pctx.arc(tx, ty, 12, 0, 7); pctx.fill();
+    pctx.fillStyle = '#fff'; pctx.fillText(i + 1, tx, ty); pctx.restore();
+  });
+}
+pcv.onclick = (e) => {
+  const r = pcv.getBoundingClientRect(), x = (e.clientX - r.left) * pcv.width / r.width / vk, y = (e.clientY - r.top) * pcv.height / r.height / vk;
+  let best = -1, bd = 1e9;
+  faces.forEach((f, i) => { const d = Math.hypot(f.fx - x, f.fy - y) / f.r; if (d < bd) { bd = d; best = i; } });
+  // a click on a cloud without a face: the face of the same cloud
+  const lab = det.label[Math.floor(y) * det.w + Math.floor(x)];
+  if (bd > 2 && lab >= 0) { const j = faces.findIndex((f) => f.lab === lab); if (j >= 0) best = j; }
+  selFace = best; drawPhoto(); listFaces();
+  const c = document.getElementById('fc' + best); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+};
+function listFaces() {
+  const box = document.getElementById('faceCards');
+  if (!faces.length) { box.innerHTML = '<div class="card">顔が見つかりませんでした。</div>'; return; }
+  box.innerHTML = `<p class="hint">${sel.value}：顔 ${faces.length} 匹。番号は写真の上の丸と同じです。</p>` + faces.map((f, i) => {
+    const w = f.why || {}, final = f.hint || 'cat';
+    let head = `<h3>#${i + 1} <span class="kindbadge">${JA[final]}</span> <span class="mono">${final}</span>`;
+    if (w.kind && w.kind !== final) head += ` <span class="ng">（ルールでは ${JA[w.kind]} → ${JA[final]}に変更：パーツを置く場所が足りない）</span>`;
+    head += '</h3>';
+    if (w.special === 'hole') return `<div class="card facecard ${i === selFace ? 'sel' : ''}" id="fc${i}">${head}<p>雲に開いた丸い穴（穴の大きさ ${fmt(w.hole)}）→ のぞく。形のルールより先に決まります。</p></div>`;
+    if (w.special === 'overcast') return `<div class="card facecard ${i === selFace ? 'sel' : ''}" id="fc${i}">${head}<p>雲が画面いっぱいで形が測れない（曇り空）→ クジラ。</p></div>`;
+    if (!w.evals) return `<div class="card facecard" id="fc${i}">${head}</div>`;
+    const feats = Object.entries(w.feats).map(([k, v]) => `<span class="mono">${CloudFind.FEATS[k].ja} ${fmt(v)}</span>`).join(' ');
+    const rows = w.evals.map((ev, k) => {
+      const conds = ev.conds.length ? ev.conds.map((c) => {
+        const f = CloudFind.FEATS[c.f], mark = c.ok ? '<span class="ok">✔</span>' : '<span class="ng">✘</span>';
+        return c.op === 'is' ? `${mark} ${f.ja}（${fmt(c.v)}）` : `${mark} ${f.ja} ${fmt(c.v)} ${c.op} ${fmt(c.th)}`;
+      }).join('<br>') : '<span class="hint">条件なし</span>';
+      return `<tr class="${k === w.rule ? 'hit' : ''}"><td class="mono">R${k + 1}</td><td>${JA[ev.kind]}</td><td>${conds}</td><td>${k === w.rule ? '<b>← これ</b>' : k < w.rule ? '' : '<span class="hint">（確かめない）</span>'}</td></tr>`;
+    }).join('');
+    return `<div class="card facecard ${i === selFace ? 'sel' : ''}" id="fc${i}">${head}<p>${feats}</p><table><tr><th></th><th>動物</th><th>条件（測った値 と しきい値）</th><th></th></tr>${rows}</table></div>`;
+  }).join('');
+}
+
+// ---------------- ④ export
+function writeDiff() {
+  const out = {};
+  for (const [k, v] of Object.entries(S.face)) if (v !== FACE0[k]) (out.face ||= {})[k] = v;
+  for (const [k, v] of Object.entries(S.rule)) if (v !== RULE0[k]) (out.rule ||= {})[k] = v;
+  for (const [k, v] of Object.entries(S.other)) if (v !== OTHER0[k]) (out.other ||= {})[k] = v;
+  document.getElementById('diffOut').value = Object.keys(out).length ? 'デバッグページで変えた設定:\n' + JSON.stringify(out, null, 1) : '（初期値から変えた設定はありません）';
+}
+document.getElementById('copyBtn').onclick = () => navigator.clipboard.writeText(document.getElementById('diffOut').value);
+document.getElementById('resetBtn').onclick = () => { localStorage.removeItem('cloudDebug'); location.reload(); };
+
+buildFaces(); buildRules(); writeDiff();
+{ const q = new URLSearchParams(location.search).get('photo'); if (q) sel.value = q; }
+loadPhoto('photos/' + sel.value);
+{ const t = new URLSearchParams(location.search).get('tab'); if (t) document.querySelector(`header button[data-tab="${t}"]`)?.click(); }
+</script>
+</body>
+</html>
