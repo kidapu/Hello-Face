@@ -43,9 +43,9 @@
 <div id="credit" hidden>VOICEVOX:ずんだもん</div>
 <video id="v" playsinline muted hidden></video>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/cloudfind.js?v=ed9a070"></script>
-<script src="../lib/segnet.js?v=ed9a070"></script>
-<script src="../lib/segdraw.js?v=ed9a070"></script>
+<script src="../lib/cloudfind.js?v=4216cd8"></script>
+<script src="../lib/segnet.js?v=4216cd8"></script>
+<script src="../lib/segdraw.js?v=4216cd8"></script>
 <script>
 // A debug view of the segmenter alone (segnet.js): the camera / a photo with the AI's classes on top, and the knobs
 // that decide its resolution and speed. ?photo=photos/clouds18.jpg opens a photo directly.
@@ -71,7 +71,7 @@ const P = {
   temporal: true, hold: 3, sure: 0.9,   // steadier labels on video (SegNet.smoother)
   hud: !TALK,           // the numbers top left
   volume: 1,            // the voice (?talk)
-  popScale: 3.1,        // how big the tapped label grows (?talk)
+  popScale: 2.6,        // how big the tapped label grows (?talk)
   bounce: 0.25,         // and how much it bounces with the voice
   spot: 1,              // while it speaks: the picture around darker, the other lines and names fainter (0 = off)
   onlyLabelled: TALK,   // outlines only round the pieces that have a name
