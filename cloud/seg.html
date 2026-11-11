@@ -43,9 +43,9 @@
 <div id="credit" hidden>VOICEVOX:ずんだもん</div>
 <video id="v" playsinline muted hidden></video>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/cloudfind.js?v=4216cd8"></script>
-<script src="../lib/segnet.js?v=4216cd8"></script>
-<script src="../lib/segdraw.js?v=4216cd8"></script>
+<script src="../lib/cloudfind.js?v=d026d63"></script>
+<script src="../lib/segnet.js?v=d026d63"></script>
+<script src="../lib/segdraw.js?v=d026d63"></script>
 <script>
 // A debug view of the segmenter alone (segnet.js): the camera / a photo with the AI's classes on top, and the knobs
 // that decide its resolution and speed. ?photo=photos/clouds18.jpg opens a photo directly.
@@ -172,7 +172,7 @@ function frame() {
       if (!view) buildView();
       if (P.fill || P.color === 'confidence' || !P.outline) { ctx.imageSmoothingEnabled = P.smooth; ctx.drawImage(view.c, layout.ox, layout.oy, layout.w, layout.h); ctx.imageSmoothingEnabled = true; }
       const pp = tapPop(now);
-      if (pp && pp.dim > 0 && tap.shade) { ctx.globalAlpha = pp.dim; ctx.drawImage(tap.shade, layout.ox, layout.oy, layout.w, layout.h); ctx.globalAlpha = 1; }
+      if (pp && pp.dim > 0) { const sh = shade(); if (sh) { ctx.globalAlpha = pp.dim; ctx.drawImage(sh, layout.ox, layout.oy, layout.w, layout.h); ctx.globalAlpha = 1; } }
       SegDraw.draw(ctx, view, { ox: layout.ox, oy: layout.oy, kx: layout.w / seg.W, ky: layout.h / seg.H },
         { dpr: Math.min(2, window.devicePixelRatio || 1), grow: P.edgeGrow, lineW: P.lineW, labels: P.labels, pop: pp });
     }
@@ -234,18 +234,27 @@ function onTap(e) {
   if (gx < 0 || gy < 0 || gx >= seg.W || gy >= seg.H) return;
   const byG = P.color === 'group', key = byG ? seg.group : seg.label, k = key[gy * seg.W + gx];
   const word = byG ? (SegDraw.GKANA || GJA)[k] : (SegDraw.KANA || {})[seg.names[k]] || seg.names[k];
-  // the picture outside the region, darkened (a spotlight on it while Zundamon speaks)
-  const sh = document.createElement('canvas'); sh.width = seg.W; sh.height = seg.H;
-  const sg = sh.getContext('2d'), id = sg.createImageData(seg.W, seg.H);
-  for (let i = 0; i < seg.W * seg.H; i++) if (key[i] !== k) id.data[i * 4 + 3] = 120;
-  sg.putImageData(id, 0, 0);
-  // softened, so its edge is not blocky (at 4x, blurred by about a cell)
-  const sh2 = document.createElement('canvas'); sh2.width = seg.W * 4; sh2.height = seg.H * 4;
-  const s2 = sh2.getContext('2d'); s2.filter = 'blur(4px)'; s2.drawImage(sh, 0, 0, sh2.width, sh2.height);
-  tap = { k, word, gx, gy, t: performance.now(), dur: 1500, shade: sh2 };
+  tap = { k, byG, word, gx, gy, t: performance.now(), dur: 1500, shadeOf: null };
   speak(word);
 }
 cv.addEventListener('pointerdown', onTap);
+// the picture outside the tapped region, darkened (a spotlight on it while Zundamon speaks); made again from each
+// new result, so on the camera it follows the region as it changes
+const shadeA = document.createElement('canvas'), shadeB = document.createElement('canvas');
+function shade() {
+  if (!seg) return null;
+  if (tap.shadeOf === seg) return shadeB;
+  const W = seg.W, H = seg.H, key = tap.byG ? seg.group : seg.label;
+  if (shadeA.width !== W || shadeA.height !== H) { shadeA.width = W; shadeA.height = H; shadeB.width = W * 2; shadeB.height = H * 2; }
+  const ga = shadeA.getContext('2d'), id = ga.createImageData(W, H);
+  for (let i = 0; i < W * H; i++) if (key[i] !== tap.k) id.data[i * 4 + 3] = 120;
+  ga.putImageData(id, 0, 0);
+  // softened, so its edge is not blocky (at 2x, blurred by about a cell)
+  const gb = shadeB.getContext('2d'); gb.clearRect(0, 0, shadeB.width, shadeB.height);
+  gb.filter = 'blur(2px)'; gb.drawImage(shadeA, 0, 0, shadeB.width, shadeB.height); gb.filter = 'none';
+  tap.shadeOf = seg;
+  return shadeB;
+}
 // the tapped region's label: pops up big at once, stays while Zundamon speaks, shrinks back as the voice ends
 function tapPop(now) {
   if (!tap) return null;
