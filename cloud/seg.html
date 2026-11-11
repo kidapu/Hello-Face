@@ -43,9 +43,9 @@
 <div id="credit" hidden>VOICEVOX:ずんだもん</div>
 <video id="v" playsinline muted hidden></video>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/cloudfind.js?v=d026d63"></script>
-<script src="../lib/segnet.js?v=d026d63"></script>
-<script src="../lib/segdraw.js?v=d026d63"></script>
+<script src="../lib/cloudfind.js?v=2ae7f45"></script>
+<script src="../lib/segnet.js?v=2ae7f45"></script>
+<script src="../lib/segdraw.js?v=2ae7f45"></script>
 <script>
 // A debug view of the segmenter alone (segnet.js): the camera / a photo with the AI's classes on top, and the knobs
 // that decide its resolution and speed. ?photo=photos/clouds18.jpg opens a photo directly.
@@ -246,8 +246,24 @@ function shade() {
   if (tap.shadeOf === seg) return shadeB;
   const W = seg.W, H = seg.H, key = tap.byG ? seg.group : seg.label;
   if (shadeA.width !== W || shadeA.height !== H) { shadeA.width = W; shadeA.height = H; shadeB.width = W * 2; shadeB.height = H * 2; }
+  // only the one piece of the class (the one its name sits on, as the outline; else the one tapped): other bits
+  // the AI also calls a door stay dark
+  const lb = view && view.labels.find((l) => l.k === tap.k);
+  let seed = lb ? lb.y * W + lb.x : tap.gy * W + tap.gx;
+  if (key[seed] !== tap.k) seed = tap.gy * W + tap.gx;
+  const piece = new Uint8Array(W * H);
+  if (key[seed] === tap.k) {
+    piece[seed] = 1; const st = [seed];
+    while (st.length) {
+      const i = st.pop(), x = i % W, y = (i / W) | 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const u = x + dx, v = y + dy, j = v * W + u;
+        if (u >= 0 && v >= 0 && u < W && v < H && !piece[j] && key[j] === tap.k) { piece[j] = 1; st.push(j); }
+      }
+    }
+  }
   const ga = shadeA.getContext('2d'), id = ga.createImageData(W, H);
-  for (let i = 0; i < W * H; i++) if (key[i] !== tap.k) id.data[i * 4 + 3] = 120;
+  for (let i = 0; i < W * H; i++) if (!piece[i]) id.data[i * 4 + 3] = 120;
   ga.putImageData(id, 0, 0);
   // softened, so its edge is not blocky (at 2x, blurred by about a cell)
   const gb = shadeB.getContext('2d'); gb.clearRect(0, 0, shadeB.width, shadeB.height);
