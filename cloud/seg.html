@@ -43,9 +43,9 @@
 <div id="credit" hidden>VOICEVOX:ずんだもん</div>
 <video id="v" playsinline muted hidden></video>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/cloudfind.js?v=47cf05a"></script>
-<script src="../lib/segnet.js?v=47cf05a"></script>
-<script src="../lib/segdraw.js?v=47cf05a"></script>
+<script src="../lib/cloudfind.js?v=ed9a070"></script>
+<script src="../lib/segnet.js?v=ed9a070"></script>
+<script src="../lib/segdraw.js?v=ed9a070"></script>
 <script>
 // A debug view of the segmenter alone (segnet.js): the camera / a photo with the AI's classes on top, and the knobs
 // that decide its resolution and speed. ?photo=photos/clouds18.jpg opens a photo directly.
@@ -71,7 +71,9 @@ const P = {
   temporal: true, hold: 3, sure: 0.9,   // steadier labels on video (SegNet.smoother)
   hud: !TALK,           // the numbers top left
   volume: 1,            // the voice (?talk)
-  popScale: 2.6,        // how big the tapped label grows (?talk)
+  popScale: 3.1,        // how big the tapped label grows (?talk)
+  bounce: 0.25,         // and how much it bounces with the voice
+  spot: 1,              // while it speaks: the picture around darker, the other lines and names fainter (0 = off)
   onlyLabelled: TALK,   // outlines only round the pieces that have a name
 };
 const GCOL = [[90, 150, 240], [255, 255, 255], [160, 110, 60], [60, 170, 60], [130, 130, 140], [230, 60, 60], [170, 90, 200]];
@@ -169,8 +171,10 @@ function frame() {
     if (seg) {
       if (!view) buildView();
       if (P.fill || P.color === 'confidence' || !P.outline) { ctx.imageSmoothingEnabled = P.smooth; ctx.drawImage(view.c, layout.ox, layout.oy, layout.w, layout.h); ctx.imageSmoothingEnabled = true; }
+      const pp = tapPop(now);
+      if (pp && pp.dim > 0 && tap.shade) { ctx.globalAlpha = pp.dim; ctx.drawImage(tap.shade, layout.ox, layout.oy, layout.w, layout.h); ctx.globalAlpha = 1; }
       SegDraw.draw(ctx, view, { ox: layout.ox, oy: layout.oy, kx: layout.w / seg.W, ky: layout.h / seg.H },
-        { dpr: Math.min(2, window.devicePixelRatio || 1), grow: P.edgeGrow, lineW: P.lineW, labels: P.labels, pop: tapPop(now) });
+        { dpr: Math.min(2, window.devicePixelRatio || 1), grow: P.edgeGrow, lineW: P.lineW, labels: P.labels, pop: pp });
     }
   }
   const f = (v) => v == null ? '-' : v.toFixed(1);
@@ -187,7 +191,8 @@ function frame() {
 requestAnimationFrame(frame);
 
 // ---------------- ?talk: tap a region, hear its name
-let actx = null, tap = null, voiceList = null, recDest = null;
+let actx = null, tap = null, voiceList = null, recDest = null, meter = null, loud = 0;
+const meterBuf = new Float32Array(512);
 const voiceBuf = {};
 const VOICE = new URL('voice/', (document.querySelector('script[src*="segdraw.js"]') || {}).src || location.href).href,
   VER = new URL((document.querySelector('script[src*="segdraw.js"]') || {}).src || location.href).search;
@@ -215,7 +220,8 @@ async function speak(word) {
   try {
     voiceBuf[f] = voiceBuf[f] || fetch(VOICE + f + VER).then((r) => r.arrayBuffer()).then((b) => new Promise((ok, ng) => actx.decodeAudioData(b, ok, ng)));
     const src = actx.createBufferSource(), g = actx.createGain(); g.gain.value = P.volume;
-    src.buffer = await voiceBuf[f]; src.connect(g).connect(actx.destination); if (recDest) g.connect(recDest);   // and into the recording
+    src.buffer = await voiceBuf[f]; src.connect(g).connect(actx.destination); if (recDest) g.connect(recDest);
+    if (!meter) { meter = actx.createAnalyser(); meter.fftSize = 512; } g.connect(meter);   // how loud, for the label's bounce   // and into the recording
     if (speak.cur) try { speak.cur.stop(); } catch (e) {}
     speak.cur = src; src.start();
     if (tap && tap.word === word) tap.dur = performance.now() - tap.t + src.buffer.duration * 1000;   // the label grows back as the voice ends
@@ -228,7 +234,15 @@ function onTap(e) {
   if (gx < 0 || gy < 0 || gx >= seg.W || gy >= seg.H) return;
   const byG = P.color === 'group', key = byG ? seg.group : seg.label, k = key[gy * seg.W + gx];
   const word = byG ? (SegDraw.GKANA || GJA)[k] : (SegDraw.KANA || {})[seg.names[k]] || seg.names[k];
-  tap = { k, word, gx, gy, t: performance.now(), dur: 1500 };
+  // the picture outside the region, darkened (a spotlight on it while Zundamon speaks)
+  const sh = document.createElement('canvas'); sh.width = seg.W; sh.height = seg.H;
+  const sg = sh.getContext('2d'), id = sg.createImageData(seg.W, seg.H);
+  for (let i = 0; i < seg.W * seg.H; i++) if (key[i] !== k) id.data[i * 4 + 3] = 120;
+  sg.putImageData(id, 0, 0);
+  // softened, so its edge is not blocky (at 4x, blurred by about a cell)
+  const sh2 = document.createElement('canvas'); sh2.width = seg.W * 4; sh2.height = seg.H * 4;
+  const s2 = sh2.getContext('2d'); s2.filter = 'blur(4px)'; s2.drawImage(sh, 0, 0, sh2.width, sh2.height);
+  tap = { k, word, gx, gy, t: performance.now(), dur: 1500, shade: sh2 };
   speak(word);
 }
 cv.addEventListener('pointerdown', onTap);
@@ -238,7 +252,12 @@ function tapPop(now) {
   const t = now - tap.t, d = tap.dur, up = 180, down = 300;
   if (t >= d) { tap = null; return null; }
   const e = t < up ? 1 - (1 - t / up) ** 3 * Math.cos(t / up * 2.5) : t > d - down ? 0.5 + 0.5 * Math.cos(Math.PI * (t - d + down) / down) : 1;   // a little overshoot going up
-  return { k: tap.k, s: 1 + (P.popScale - 1) * e, x: tap.gx, y: tap.gy, name: tap.word };
+  // the voice's loudness now (quick up, slower down): the label bounces with it, as if it were talking
+  let v = 0;
+  if (meter) { meter.getFloatTimeDomainData(meterBuf); for (const x of meterBuf) v += x * x; v = Math.sqrt(v / meterBuf.length); }
+  loud = Math.max(Math.min(1, v * 12), loud * 0.8);
+  const fade = Math.min(1, Math.max(0, e));
+  return { k: tap.k, s: (1 + (P.popScale - 1) * e) * (1 + P.bounce * loud), x: tap.gx, y: tap.gy, name: tap.word, dim: P.spot * fade };
 }
 if (TALK) {
   document.title = 'しゃべるセグメンテーション';
@@ -327,7 +346,7 @@ gv.add(P, 'dimLowConf', 0, 1, 0.05).name('自信がない所を薄く (しきい
 gv.add(P, 'fit', ['contain', 'cover']).name('画面の合わせ方');
 const gc = gui.addFolder('カメラ');
 gv.add(P, 'hud').name('数値を表示').onChange((v) => ($('hud').hidden = !v || !mode));
-if (TALK) { gv.add(P, 'volume', 0, 1, 0.05).name('声の大きさ'); gv.add(P, 'popScale', 1, 5, 0.1).name('タップした名前の拡大'); }
+if (TALK) { gv.add(P, 'volume', 0, 1, 0.05).name('声の大きさ'); gv.add(P, 'popScale', 1, 5, 0.1).name('タップした名前の拡大'); gv.add(P, 'bounce', 0, 0.6, 0.02).name('声に合わせてはずむ'); gv.add(P, 'spot', 0, 1, 0.05).name('しゃべる間まわりを暗く'); }
 gc.add(P, 'camRes', [360, 480, 720, 1080]).name('カメラの解像度 (縦)').onChange(() => { if (mode === 'cam') startCam(); });
 gui.close();
 { const q = new URLSearchParams(location.search).get('photo'); if (q) fetch(q).then((r) => r.blob()).then(usePhoto); }
