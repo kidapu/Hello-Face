@@ -39,11 +39,11 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=e51bc20"></script>
-<script src="../lib/cloudfind.js?v=e51bc20"></script>
-<script src="../lib/shapenet.js?v=e51bc20"></script>
-<script src="../lib/colorfind.js?v=e51bc20"></script>
-<script src="../lib/samfind.js?v=e51bc20"></script>
+<script src="../lib/doodle.js?v=5bf8df2"></script>
+<script src="../lib/cloudfind.js?v=5bf8df2"></script>
+<script src="../lib/shapenet.js?v=5bf8df2"></script>
+<script src="../lib/colorfind.js?v=5bf8df2"></script>
+<script src="../lib/samfind.js?v=5bf8df2"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -115,7 +115,7 @@ if (Q.has('learn')) P.kindBy = 'learn';
 if (Q.has('rule')) P.kindBy = 'rule';
 { const q = Q.get('photo'); if (q) P.photoUrl = q.includes('/') ? q : 'photos/' + q; }
 P.shapeNet = ShapeNet;
-const loadShapeNet = () => { if (P.kindBy === 'learn') ShapeNet.load().then(redetect).catch((e) => console.warn('shapenet', e)); };
+const loadShapeNet = () => { if (P.kindBy === 'learn') ShapeNet.load().then(() => redetect()).catch((e) => console.warn('shapenet', e)); };
 loadShapeNet();
 const cv = document.getElementById('c'), ctx = cv.getContext('2d'), video = document.getElementById('v');
 let img = null, det = null, faces = [];
