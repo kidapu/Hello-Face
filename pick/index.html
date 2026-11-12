@@ -39,11 +39,11 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=1bef42c"></script>
-<script src="../lib/cloudfind.js?v=1bef42c"></script>
-<script src="../lib/shapenet.js?v=1bef42c"></script>
-<script src="../lib/colorfind.js?v=1bef42c"></script>
-<script src="../lib/samfind.js?v=1bef42c"></script>
+<script src="../lib/doodle.js?v=0cf354e"></script>
+<script src="../lib/cloudfind.js?v=0cf354e"></script>
+<script src="../lib/shapenet.js?v=0cf354e"></script>
+<script src="../lib/colorfind.js?v=0cf354e"></script>
+<script src="../lib/samfind.js?v=0cf354e"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -146,6 +146,9 @@ function detect() {
 let colorDet = null, objs = [], samBusy = false, samFor = null, nextObj = 1;
 const hintEl = document.getElementById('hint');
 let hintT = 0;
+// errors on the screen too (a phone has no console)
+addEventListener('error', (e) => status('エラー: ' + (e.message || e), 8000));
+addEventListener('unhandledrejection', (e) => status('エラー: ' + ((e.reason && e.reason.message) || e.reason), 8000));
 const status = (t, ms = 0) => { hintEl.textContent = t || ''; clearTimeout(hintT); if (t && ms) hintT = setTimeout(() => (hintEl.textContent = ''), ms); };
 // the cut-out things as a detector result for CloudFind.find (one label per thing, later taps on top)
 function samDet() {
@@ -173,8 +176,12 @@ async function samStart() {
   samBusy = true; syncButtons();
   try {
     await SamFind.load(status);
-    if (samFor !== img) { status('AI: 写真を解析中…'); const t0 = performance.now(); await SamFind.embed(img); samFor = img;
-      console.log('[sam] embed', Math.round(performance.now() - t0), 'ms', SamFind.device); }
+    if (samFor !== img) {   // seconds on a phone: count them, so it does not look stuck
+      const t0 = performance.now(), dev = SamFind.device === 'webgpu' ? 'GPU' : 'CPU';
+      const tick = () => status(`AI: 写真を解析中… ${Math.round((performance.now() - t0) / 1000)} 秒 (${dev})`);
+      tick(); const iv = setInterval(tick, 1000);
+      try { await SamFind.embed(img); } finally { clearInterval(iv); }
+      samFor = img; console.log('[sam] embed', Math.round(performance.now() - t0), 'ms', SamFind.device); }
     if (!objs.length && P.samAuto) {   // start from what the colour mode found
       status('AI: 切り抜き中…');
       const seeds = CloudFind.find(colorDet, P).slice(0, 16);
