@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pick Doodle</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #15171c; overflow: hidden; color: #fff; font-family: system-ui, sans-serif; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: pointer; touch-action: manipulation; }
+  video { display: none; }
+  #hint { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(92px + env(safe-area-inset-bottom)); max-width: 92vw;
+    background: #000a; padding: 6px 14px; border-radius: 999px; font-size: 13px; pointer-events: none; text-align: center;
+    transition: opacity .3s; }
+  #hint:empty { opacity: 0; }
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 18px calc(16px + env(safe-area-inset-bottom));
+    display: flex; align-items: center; justify-content: space-around; background: linear-gradient(transparent, #0008); }
+  .btn { min-width: 54px; height: 54px; border-radius: 27px; border: none; background: #0007; color: #fff; font-size: 13px;
+    font-weight: 700; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 0 10px;
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); font-family: inherit; }
+  .btn b { font-size: 20px; line-height: 1; font-weight: 400; }
+  .btn small { font-size: 10px; opacity: 0.9; }
+  .btn.on { background: #3a7be0; }
+  .btn[hidden] { display: none; }
+  #shot { width: 70px; height: 70px; border-radius: 50%; border: 5px solid #fff; background: #ffffff70; }
+  #shot:active { background: #fff; }
+  .lil-gui.root { position: fixed !important; top: env(safe-area-inset-top); right: 0; max-height: 70vh; overflow: auto; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<video id="v" playsinline muted autoplay></video>
+<div id="hint"></div>
+<div id="bar">
+  <button class="btn" id="bPhoto"><b>🖼</b><small>写真</small></button>
+  <button class="btn" id="bCam"><b>📷</b><small>カメラ</small></button>
+  <button class="btn" id="shot" aria-label="止める" hidden></button>
+  <button class="btn" id="bAi"><b>✂️</b><small>AI</small></button>
+  <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
+<script src="../lib/doodle.js?v=5e2740b"></script>
+<script src="../lib/cloudfind.js?v=5e2740b"></script>
+<script src="../lib/shapenet.js?v=5e2740b"></script>
+<script src="../lib/colorfind.js?v=5e2740b"></script>
+<script src="../lib/samfind.js?v=5e2740b"></script>
+<script>
+// Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
+// edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
+// (the shape rules CloudFind.RULES, or the small CNN shapenet.js), as on the cloud camera.
+// Sources: a photo, or the camera (live, colour mode; the 📸 button freezes the frame into a photo).
+// Option "AIで切り抜く": Segment Anything (samfind.js, runs in the browser) cuts out the tapped thing
+// instead; one face per thing (on a still picture: turning it on with the camera live freezes the frame).
+
+const P = {
+  photoUrl: 'photos/woodblocks.jpg',
+  fit: 'contain',
+  // detection
+  detW: 300,          // detector width (px)
+  tol: 22,            // colour tolerance (Lab distance that still counts as the picked colour)
+  lumaW: 0.4,         // how much a lightness difference counts (low = shading is still the same thing)
+  edgeThr: 4.0,       // cut the mask where the lightness changes faster than this (0 = no cut)
+  edgeW: 0,           // extra width of the cut (px)
+  tap: 'pick',        // what a click does: pick / add / face
+  sam: false,         // AI cut-out (Segment Anything) instead of the colour mask
+  samLevel: 'auto',   // which of SAM's 3 masks: auto (best score) / 0 small part / 1 / 2 whole thing
+  samAuto: true,      // when turned on: cut out the things the colour mode found
+  blur: 1.0,          // detector blur (px at detector resolution)
+  thrBias: 0.0,       // nudge the automatic threshold (+ = only the whitest clouds)
+  minR: 0.03,        // smallest face (inscribed circle radius / photo width)
+  maxR: 0.12,         // a bigger bulge still gets a face of at most this radius
+  maxFaces: 24,
+  sep: 0.9,           // faces must be this far apart (x the sum of their radii / 2 ... 1 = circles touch)
+  faceUp: 0.15,       // move the face up toward the bulge's top (0 = circle centre)
+  peek: false,        // no "peeking through a hole" faces (holes in a colour mask are mostly gaps, not windows)
+  // camera
+  detectFps: 8,       // detections per second on the live camera
+  follow: 0.4,        // how quickly a face follows its thing (0..1 per detection)
+  // character
+  kind: 'auto',       // auto = from the shape / random = cat or bear / one animal for all
+  kindBy: 'rule',     // the animal from the shape: 'rule' = CloudFind.RULES, 'learn' = the shape classifier (shapenet.js)
+  learnMin: 0.3,      // 'learn': below this probability for its best animal, the rules decide
+  learnContext: true, // 'learn': the rules about the whole picture (very big -> whale, many small -> sheep) still first
+  showName: true,     // the animal's name by each face
+  expression: 'random',
+  faceScale: 1.0,     // features radius / circle radius
+  eyeSize: 1.2,
+  eyeGap: 1.0,
+  ears: true,
+  earSize: 0.8,
+  whiskers: true,
+  paws: true,
+  arms: false,        // the arms reach for the next lobe: on touching blocks they cross the picture
+  blush: 0.0,
+  // pen
+  ink: '#24140c',
+  lineW: 2.8,
+  boil: 1.0,          // hand-drawn wobble (px)
+  boilFps: 8,
+  // life
+  blink: true,
+  gaze: true,
+  breathe: 0.012,
+  // misc
+  seed: 1,
+  showMask: false,
+};
+
+const Q = new URLSearchParams(location.search);
+if (Q.has('sam')) P.sam = true;
+if (Q.has('mask')) P.showMask = true;
+if (Q.has('learn')) P.kindBy = 'learn';
+{ const q = Q.get('photo'); if (q) P.photoUrl = q.includes('/') ? q : 'photos/' + q; }
+P.shapeNet = ShapeNet;
+const loadShapeNet = () => { if (P.kindBy === 'learn') ShapeNet.load().then(redetect).catch((e) => console.warn('shapenet', e)); };
+loadShapeNet();
+const cv = document.getElementById('c'), ctx = cv.getContext('2d'), video = document.getElementById('v');
+let img = null, det = null, faces = [];
+let mode = 'photo', stream = null;   // 'photo' (img) or 'cam' (the live video)
+const src = () => (mode === 'cam' ? video : img);
+const srcSize = () => (mode === 'cam' ? [video.videoWidth, video.videoHeight] : img ? [img.width, img.height] : [0, 0]);
+const { KINDS, EXPRS, mulberry } = Doodle;
+// the animals' names (the rules' Japanese names, plus the ones no rule gives)
+const NAME = { peek: 'のぞき', plain: 'かお' };
+for (const r of CloudFind.RULES) NAME[r.kind] = r.ja;
+
+// ---------------- detection (colorfind.js -> CloudFind.find)
+let refs = [];        // picked Lab colours
+let pickAt = null;   // [u, v] 0..1 of the first pick (?pick=u,v), default: the image centre
+{ const q = Q.get('pick'); if (q) pickAt = q.split(',').map(Number); }
+function detect() {
+  const [sw, sh] = srcSize();
+  if (!sw || !sh) return;
+  if (!refs.length) {   // first run: pick at pickAt / the centre
+    const d0 = ColorFind.analyse(src(), sw, sh, { ...P, refs: [] });
+    const [u, v] = pickAt || [0.5, 0.5];
+    refs = [ColorFind.pick(d0, u * d0.w, v * d0.h, 3)];
+  }
+  colorDet = ColorFind.analyse(src(), sw, sh, { ...P, refs });
+  // one label per connected piece of the colour mask: each piece's silhouette picks its animal
+  { const fm = CloudFind.fromMask(colorDet.mask, colorDet.w, colorDet.h, 0.002); colorDet.label = fm.label; colorDet.comps = fm.comps; }
+  det = mode === 'photo' && P.sam && SamFind.ready && samFor === img ? samDet() : colorDet;
+  placeFaces();
+}
+// ---------------- AI cut-out (samfind.js)
+let colorDet = null, objs = [], samBusy = false, samFor = null;
+const hintEl = document.getElementById('hint');
+let hintT = 0;
+const status = (t, ms = 0) => { hintEl.textContent = t || ''; clearTimeout(hintT); if (t && ms) hintT = setTimeout(() => (hintEl.textContent = ''), ms); };
+// the cut-out things as a detector result for CloudFind.find (one label per thing, later taps on top)
+function samDet() {
+  const { w, h } = colorDet, n = w * h, label = new Int32Array(n).fill(-1), mask = new Uint8Array(n);
+  objs.forEach((o, k) => { for (let i = 0; i < n; i++) if (o.mask[i]) label[i] = k; });
+  const comps = objs.map(() => ({ area: 0, keep: true })), white = new Float32Array(n);
+  for (let i = 0; i < n; i++) if (label[i] >= 0) { mask[i] = 1; white[i] = 1; comps[label[i]].area++; }
+  let cover = 0; for (const c of comps) cover += c.area;
+  CloudFind.boxBlur(white, w, h, 1);
+  return { ...colorDet, mask, white, label, comps, cover: cover / n, D: ColorFind.distance(mask, w, h), sam: true };
+}
+async function samAdd(u, v, add) {
+  const { w, h } = colorDet, r = await SamFind.segment(u, v, w, h, P.samLevel);
+  if (!r || r.area < 12 || r.area > w * h * 0.6) return false;   // nothing / the whole background
+  if (!add) objs = [];
+  // the same thing again (e.g. two colour faces on one block): keep one
+  for (const o of objs) { let both = 0; for (let i = 0; i < w * h; i++) both += o.mask[i] & r.mask[i];
+    if (both > 0.6 * Math.min(o.area, r.area)) return false; }
+  objs.push(r); return true;
+}
+async function samStart() {
+  if (!P.sam || samBusy) return;
+  if (mode === 'cam') freeze();   // SAM works on a still picture
+  if (!img) return;
+  samBusy = true; syncButtons();
+  try {
+    await SamFind.load(status);
+    if (samFor !== img) { status('AI: 写真を解析中…'); const t0 = performance.now(); await SamFind.embed(img); samFor = img;
+      console.log('[sam] embed', Math.round(performance.now() - t0), 'ms', SamFind.device); }
+    if (!objs.length && P.samAuto) {   // start from what the colour mode found
+      status('AI: 切り抜き中…');
+      const seeds = CloudFind.find(colorDet, P).slice(0, 16);
+      for (const f of seeds) await samAdd(f.fx / colorDet.w, f.fy / colorDet.h, true);
+    }
+    status('AI: タップで追加 / 切り抜いた所をタップで外す', 4000);
+  } catch (e) { console.error(e); status('AI: 読み込めませんでした (' + (e.message || e) + ')', 6000); P.sam = false; gui.controllersRecursive().forEach(c => c.updateDisplay()); }
+  samBusy = false; syncButtons();
+  detect(); updateView();
+}
+function placeFaces() {
+  const rnd = mulberry(P.seed * 9973 + 17);
+  // the rules about the sky rather than the shape are off here (a very big piece -> whale, one of a flock of
+  // small ones -> sheep, overcast -> one whale); a colour piece can hold many things (touching blocks), so no
+  // limit of one face per piece there; an AI cut-out is one thing: one face
+  const o = { ...P, whaleArea: 9, whaleCover: 9, sheepCount: 1e9, learnContext: false, ...(det.sam ? { relMin: 0 } : { perCloud: 0 }) };
+  const found = CloudFind.find(det, o).map((f) => Object.assign(f, {
+    kind0: f.hint || KINDS[rnd() < 0.5 ? 0 : 1], kindR: KINDS[rnd() < 0.5 ? 0 : 1], expr0: EXPRS[Math.floor(rnd() * EXPRS.length)],
+    kindOver: null, exprOver: null, pupil: 0.48 + rnd() * 0.17, ph: rnd() * 100, seed: Math.floor(rnd() * 1e6), alpha: 1, miss: 0, hits: 1 }));
+  faces = mode === 'cam' ? track(found) : found;
+}
+// live camera: each face keeps its character (and blink, gaze ...) from detection to detection; it moves toward
+// the newly found place, changes animal only after the new one came 3 times in a row, and fades in / out
+const GEOM = ['cx', 'cy', 'cr', 'ears', 'paws', 'body', 'tail', 'wings', 'arms', 'hole', 'holePoly', 'why', 'lab', 'hint', 'relR'];
+function track(found) {
+  const k = P.follow, mix = (a, b) => a + k * (b - a), used = new Set(), out = [];
+  for (const t of [...faces].sort((a, b) => b.hits - a.hits)) {
+    let best = -1, bd = 1e9;
+    found.forEach((f, i) => { if (used.has(i)) return; const d = Math.hypot(f.fx - t.fx, f.fy - t.fy);
+      if (d < Math.max(t.r, f.r) * 1.3 && d < bd) { bd = d; best = i; } });
+    if (best < 0) { t.miss++; if (t.miss < 4) out.push(t); continue; }
+    const f = found[best]; used.add(best);
+    t.fx = mix(t.fx, f.fx); t.fy = mix(t.fy, f.fy); t.r = mix(t.r, f.r);
+    const ears = t.ears && f.ears && t.ears.length === f.ears.length
+      ? f.ears.map((e, j) => ({ ...e, x: mix(t.ears[j].x, e.x), y: mix(t.ears[j].y, e.y) })) : f.ears;
+    for (const g of GEOM) t[g] = f[g];
+    t.ears = ears;
+    const nk = f.hint || t.kind0;
+    if (nk !== t.kind0) { t.vote = t.vote && t.vote.k === nk ? { k: nk, n: t.vote.n + 1 } : { k: nk, n: 1 };
+      if (t.vote.n >= 3) { t.kind0 = nk; t.vote = null; } } else t.vote = null;
+    t.miss = 0; t.hits++; out.push(t);
+  }
+  found.forEach((f, i) => { if (!used.has(i)) { f.alpha = 0; out.push(f); } });
+  return out;
+}
+
+// ---------------- view mapping (detector px -> canvas px)
+let view = { s: 1, ox: 0, oy: 0, k: 1 };
+function resize() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(innerWidth * dpr); cv.height = Math.round(innerHeight * dpr);
+  updateView();
+}
+function updateView() {
+  const [sw, sh] = srcSize();
+  if (!sw || !det) return;
+  const W = cv.width, H = cv.height;
+  const s = (P.fit === 'cover' || mode === 'cam' ? Math.max : Math.min)(W / sw, H / sh);
+  view = { s, ox: (W - sw * s) / 2, oy: (H - sh * s) / 2, k: sw / det.w * s };
+}
+const toScr = (x, y) => [view.ox + x * view.k, view.oy + y * view.k];
+
+// ---------------- drawing (doodle.js)
+const dprOf = () => Math.min(2, window.devicePixelRatio || 1);
+const style = () => ({ ink: P.ink, lineW: P.lineW, boil: P.boil, boilFrame, eyeSize: P.eyeSize, eyeGap: P.eyeGap,
+  earSize: P.earSize, ears: P.ears, whiskers: P.whiskers, paws: P.paws, blush: P.blush, dpr: dprOf(),
+  gaze: P.gaze, blink: P.blink });
+let boilFrame = 0;
+const kindOf = (f) => f.kindOver || (P.kind === 'auto' ? f.kind0 : P.kind === 'random' ? f.kindR : P.kind);
+function drawFace(f, t, o) {
+  const kind = kindOf(f);
+  const expr = f.exprOver || (P.expression === 'random' ? f.expr0 : P.expression);
+  const breathe = 1 + P.breathe * Math.sin(t * 1.4 + f.ph);
+  const [sx, sy] = toScr(f.fx, f.fy + Math.sin(t * 0.9 + f.ph) * f.r * 0.01);
+  const pt = (q) => { const [x, y] = toScr(q.x, q.y); return { ...q, x, y }; };
+  f.x = sx; f.y = sy; f.U = f.r * P.faceScale * view.k * breathe; f.rot = 0; f.kind = kind; f.expr = expr;
+  Doodle.draw(ctx, { ...f,
+    ears: f.ears && f.ears.map(pt), paws: f.paws && f.paws.map(pt),
+    wings: f.wings && f.wings.map(pt), holePoly: f.holePoly && f.holePoly.map(pt),
+    tail: f.tail && pt(f.tail),
+    arms: P.arms && f.arms && f.arms.map((a) => { const [x0, y0] = toScr(a.sx, a.sy), [x1, y1] = toScr(a.x, a.y); return { sx: x0, sy: y0, x: x1, y: y1 }; }),
+    body: f.body && f.body.map((q) => ({ ...pt(q), half: q.half * view.k })) }, o);
+  if (P.showName && f.alpha > 0.3) drawName(f, kind);
+}
+// the animal's name under the face (with the classifier's confidence when it decided, in the debug view)
+function drawName(f, kind) {
+  const d = dprOf(), fs = Math.round(13 * d);
+  let t = NAME[kind] || kind;
+  if (P.showMask && f.why && f.why.probs && f.why.by === 'learn') t += ` ${Math.round(100 * f.why.probs[f.why.kind])}%`;
+  ctx.save(); ctx.globalAlpha = f.alpha; ctx.font = `700 ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const w = ctx.measureText(t).width + fs, x = f.x, y = f.y + f.U * 1.25 + fs;
+  ctx.fillStyle = '#000a'; ctx.beginPath(); ctx.roundRect(x - w / 2, y - fs * 0.8, w, fs * 1.6, fs * 0.8); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.fillText(t, x, y);
+  ctx.restore();
+}
+function animate(dt) {
+  const o = style();
+  for (const f of faces) {
+    const target = f.miss ? 0 : 1;
+    f.alpha += (target - f.alpha) * Math.min(1, dt * (mode === 'cam' ? 5 : 100));
+    Doodle.life(f, dt, o);
+  }
+}
+
+// ---------------- frame
+let last = performance.now(), lastDet = 0;
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  boilFrame = P.boil > 0 ? Math.floor(now / 1000 * P.boilFps) : 0;
+  const [sw, sh] = srcSize();
+  if (mode === 'cam' && sw && now - lastDet > 1000 / P.detectFps) { lastDet = now; detect(); updateView(); }
+  animate(dt);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#15171c'; ctx.fillRect(0, 0, cv.width, cv.height);
+  if (sw && det) {
+    ctx.drawImage(src(), view.ox, view.oy, sw * view.s, sh * view.s);
+    if (P.showMask) drawMask();
+    const t = now / 1000, o = style();
+    for (const f of faces) if (f.alpha > 0.01) drawFace(f, t, o);
+  }
+  requestAnimationFrame(frame);
+}
+let maskCanvas = null;
+function drawMask() {
+  if (!maskCanvas || maskCanvas._det !== det) {
+    if (!maskCanvas) maskCanvas = document.createElement('canvas');
+    maskCanvas.width = det.w; maskCanvas.height = det.h; maskCanvas._det = det;
+    const m = maskCanvas.getContext('2d'), id = m.createImageData(det.w, det.h);
+    const w = det.w, h = det.h, L = det.label;
+    // one colour per thing (each cut-out / each piece of the colour mask), with a solid outline
+    const hue = (k) => { const t = (k * 0.618034) % 1, f = (n) => { const q = (n + t * 6) % 6; return 255 * Math.max(0, Math.min(1, Math.abs(q - 3) - 1)); }; return [f(0), f(4), f(2)]; };
+    for (let i = 0; i < w * h; i++) {
+      if (!det.mask[i]) { id.data[i * 4 + 3] = 0; continue; }
+      const k = L ? L[i] : -1, [r, g, b] = k >= 0 ? hue(k) : [255, 60, 160];
+      const x = i % w, edge = L && (x === 0 || x === w - 1 || i < w || i >= w * (h - 1) || L[i - 1] !== k || L[i + 1] !== k || L[i - w] !== k || L[i + w] !== k);
+      id.data[i * 4] = r; id.data[i * 4 + 1] = g; id.data[i * 4 + 2] = b; id.data[i * 4 + 3] = edge ? 255 : 100;
+    }
+    m.putImageData(id, 0, 0);
+  }
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(maskCanvas, view.ox, view.oy, det.w * view.k, det.h * view.k);
+  ctx.imageSmoothingEnabled = true;
+  ctx.strokeStyle = '#ffe000'; ctx.lineWidth = 1.5;
+  for (const f of faces) { const [x, y] = toScr(f.cx, f.cy); ctx.beginPath(); ctx.arc(x, y, f.cr * view.k, 0, Math.PI * 2); ctx.stroke(); }
+}
+
+// ---------------- sources: photo / camera
+function stopCam() { if (stream) stream.getTracks().forEach((t) => t.stop()); stream = null; }
+function usePicture(im) {   // an Image or a canvas (a frozen camera frame)
+  stopCam(); mode = 'photo'; img = im; refs = []; objs = []; faces = [];
+  detect(); updateView(); syncButtons(); samStart();
+}
+let firstPhoto = true;
+function loadPhoto(url) {
+  const im = new Image();
+  im.onload = () => { firstPhoto = false; usePicture(im); };
+  im.onerror = () => {
+    console.warn('could not load', url);
+    // no sample photos here (the public page): start from the device's own
+    if (firstPhoto) { firstPhoto = false; photoCtl.hide(); status('「カメラ」か「写真」を選んでください'); }
+  };
+  im.src = url;
+}
+async function startCam() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    status('このページではカメラが使えません（https:// のアドレスで開いてください）', 6000); return;
+  }
+  try {
+    stopCam();
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+    video.srcObject = stream; await video.play();
+    mode = 'cam'; faces = []; objs = []; lastDet = 0;
+    // keep the picked colours; with none yet, the first frame picks the centre
+    syncButtons(); status('拾いたい色のものをタップ / 📸で止める', 4000);
+  } catch (e) { status('カメラを開けませんでした: ' + (e.name || e.message || e), 6000); }
+}
+// the camera frame as it is now -> a still picture (the colours picked so far stay)
+function freeze() {
+  if (mode !== 'cam' || !video.videoWidth) return;
+  const c = document.createElement('canvas'); c.width = video.videoWidth; c.height = video.videoHeight;
+  c.getContext('2d').drawImage(video, 0, 0);
+  const keep = refs; stopCam(); mode = 'photo'; img = c; refs = keep; objs = []; faces = [];
+  detect(); updateView(); syncButtons();
+}
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => {
+  e.preventDefault();
+  const file = [...e.dataTransfer.files].find(f => f.type.startsWith('image/'));
+  if (file) loadPhoto(URL.createObjectURL(file));
+});
+// phones cannot drop files: pick one (or take a picture)
+const fileIn = Object.assign(document.createElement('input'), { type: 'file', accept: 'image/*' });
+fileIn.onchange = () => { const f = fileIn.files[0]; if (f) loadPhoto(URL.createObjectURL(f)); fileIn.value = ''; };
+
+// ---------------- taps
+cv.addEventListener('click', e => {
+  if (!det) return;
+  const dpr = cv.width / innerWidth, x = (e.clientX * dpr - view.ox) / view.k, y = (e.clientY * dpr - view.oy) / view.k;
+  if (P.tap !== 'face' || e.shiftKey) {
+    if (x < 0 || y < 0 || x >= det.w || y >= det.h) return;
+    if (P.sam && mode === 'photo') {
+      if (!SamFind.ready || samBusy || samFor !== img) return;
+      // AI mode: a tap adds the thing under the finger; a tap on something already cut out removes it
+      const k = det.label ? det.label[Math.floor(y) * det.w + Math.floor(x)] : -1;
+      if (k >= 0) { objs.splice(k, 1); detect(); updateView(); return; }
+      samBusy = true; status('AI: 切り抜き中…');
+      samAdd(x / det.w, y / det.h, true)
+        .catch(console.error).finally(() => { samBusy = false; status(''); detect(); updateView(); });
+      return;
+    }
+    const lab = ColorFind.pick(det.sam ? colorDet : det, x, y, 2);
+    if (!lab) return;
+    refs = (P.tap === 'add' || e.shiftKey) ? [...refs, lab] : [lab];
+    if (mode === 'cam') faces = [];
+    detect(); updateView(); return;
+  }
+  let best = null, bd = 1e9;
+  for (const f of faces) { const d = Math.hypot(f.fx - x, f.fy - y) / f.r; if (d < 1.6 && d < bd) { bd = d; best = f; } }
+  if (!best) return;
+  if (e.shiftKey) { const cur = best.exprOver || (P.expression === 'random' ? best.expr0 : P.expression); best.exprOver = EXPRS[(EXPRS.indexOf(cur) + 1) % EXPRS.length]; }
+  else { const cur = kindOf(best); best.kindOver = KINDS[(KINDS.indexOf(cur) + 1) % KINDS.length]; }
+});
+addEventListener('resize', resize);
+
+// ---------------- buttons
+const $ = (id) => document.getElementById(id);
+function syncButtons() {
+  $('bCam').hidden = mode === 'cam'; $('shot').hidden = mode !== 'cam';
+  $('bAi').classList.toggle('on', P.sam); $('bAi').style.opacity = samBusy ? 0.55 : 1;
+}
+$('bPhoto').onclick = () => fileIn.click();
+$('bCam').onclick = () => startCam();
+$('shot').onclick = () => freeze();
+$('bAi').onclick = () => { P.sam = !P.sam; gui.controllersRecursive().forEach(c => c.updateDisplay()); samToggled(); };
+$('bMore').onclick = () => (gui._closed ? gui.open() : gui.close());
+function samToggled() { syncButtons(); if (P.sam) samStart(); else { status(''); redetect(); } }
+
+// ---------------- GUI
+var gui = new lil.GUI({ title: 'Pick Doodle' });
+const redetect = () => { if (mode === 'cam') faces = []; detect(); updateView(); };
+const photoCtl = gui.add(P, 'photoUrl', ['photos/woodblocks.jpg', 'photos/leaves.jpg', 'photos/bark2.jpg', 'photos/bark.jpg', 'photos/clouds.jpg', 'photos/clouds6.jpg']).name('見本の写真').onChange(loadPhoto);
+gui.add(P, 'tap', { '拾う': 'pick', '足す': 'add', 'キャラ切替': 'face' }).name('タップ');
+const gk = gui.addFolder('動物');
+gk.add(P, 'kind', { '形から': 'auto', 'ネコかクマ（ランダム）': 'random', ...Object.fromEntries(KINDS.map((k) => [NAME[k] || k, k])) }).name('動物');
+gk.add(P, 'kindBy', { 'ルール': 'rule', '学習（形を見て判定）': 'learn' }).name('形からの決め方').onChange(() => { loadShapeNet(); redetect(); });
+gk.add(P, 'showName').name('名前を表示');
+const ga = gui.addFolder('AIで切り抜く (Segment Anything)');
+ga.add(P, 'sam').name('AIで切り抜く').onChange(samToggled);
+ga.add(P, 'samLevel', { '自動': 'auto', '小さく': '0', '中くらい': '1', '大きく': '2' }).name('切り抜く大きさ');
+ga.add(P, 'showMask').name('認識した範囲を表示').listen();
+ga.add(P, 'samAuto').name('色の結果から始める');
+// the model is chosen when it loads, so switching reloads the page (?sam&samlite)
+ga.add({ lite: Q.has('samlite') }, 'lite').name('軽量モデル (14MB, CPU)').onChange((v) => {
+  const q = new URLSearchParams(location.search); q.set('sam', ''); v ? q.set('samlite', '') : q.delete('samlite');
+  q.set('photo', P.photoUrl); location.search = q.toString().replace(/=(&|$)/g, '$1'); });
+ga.add({ clear() { objs = []; redetect(); } }, 'clear').name('切り抜きをリセット');
+gui.add(P, 'fit', ['contain', 'cover']).name('表示 (写真)').onChange(updateView);
+const gd = gui.addFolder('検出');
+gd.add(P, 'tol', 4, 60, 0.5).name('色の許容範囲').onFinishChange(redetect);
+gd.add(P, 'lumaW', 0, 1, 0.01).name('明るさの差の重み').onFinishChange(redetect);
+gd.add(P, 'edgeThr', 0, 20, 0.1).name('境目で切る強さ').onFinishChange(redetect);
+gd.add(P, 'edgeW', 0, 3, 1).name('境目の太さ').onFinishChange(redetect);
+gd.add({ reset() { refs = []; redetect(); } }, 'reset').name('拾った色をリセット');
+gd.add(P, 'thrBias', -0.3, 0.3, 0.005).name('しきい値の補正').onFinishChange(redetect);
+gd.add(P, 'blur', 0, 6, 1).name('ぼかし').onFinishChange(redetect);
+gd.add(P, 'minR', 0.01, 0.15, 0.001).name('最小の顔').onFinishChange(redetect);
+gd.add(P, 'maxR', 0.05, 0.4, 0.005).name('最大の顔').onFinishChange(redetect);
+gd.add(P, 'maxFaces', 1, 24, 1).name('顔の数').onFinishChange(redetect);
+gd.add(P, 'sep', 0.6, 2.5, 0.01).name('顔どうしの間隔').onFinishChange(redetect);
+gd.add(P, 'faceUp', 0, 1, 0.01).name('顔を上に寄せる').onFinishChange(redetect);
+gd.add(P, 'detectFps', 1, 20, 1).name('カメラ: 1秒の検出回数');
+gd.add(P, 'follow', 0.05, 1, 0.01).name('カメラ: 顔の追いかけ');
+gd.add(P, 'showMask').name('マスク表示').listen();
+const gc = gui.addFolder('キャラ');
+gc.add(P, 'expression', ['random', ...EXPRS]).name('表情');
+gc.add(P, 'faceScale', 0.4, 1.2, 0.01).name('顔の大きさ').onFinishChange(redetect);
+gc.add(P, 'eyeSize', 0.5, 1.8, 0.01).name('目の大きさ');
+gc.add(P, 'eyeGap', 0.6, 1.5, 0.01).name('目の間隔');
+gc.add(P, 'ears').name('耳');
+gc.add(P, 'earSize', 0.4, 2, 0.01).name('耳の大きさ');
+gc.add(P, 'whiskers').name('ヒゲ');
+gc.add(P, 'paws').name('手 (クマ)');
+gc.add(P, 'arms').name('腕');
+gc.add(P, 'blush', 0, 1, 0.01).name('ほっぺ');
+gc.add(P, 'seed', 1, 999, 1).name('シード').onFinishChange(redetect);
+gc.add({ reroll() { P.seed = 1 + Math.floor(Math.random() * 998); gui.controllersRecursive().forEach(c => c.updateDisplay()); redetect(); } }, 'reroll').name('キャラを振り直す');
+const gp = gui.addFolder('ペン');
+gp.addColor(P, 'ink').name('線の色');
+gp.add(P, 'lineW', 0.5, 6, 0.1).name('線の太さ');
+gp.add(P, 'boil', 0, 3, 0.05).name('手描きの揺れ');
+gp.add(P, 'boilFps', 1, 24, 1).name('揺れの速さ');
+const gl = gui.addFolder('動き');
+gl.add(P, 'blink').name('まばたき');
+gl.add(P, 'gaze').name('視線');
+gl.add(P, 'breathe', 0, 0.05, 0.001).name('呼吸');
+gui.add({ save() { cv.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'pick_doodle.png'; a.click(); }); } }, 'save').name('PNG保存');
+[gd, gc, gp, gl].forEach((f) => f.close());
+if (innerWidth < 700) gui.close();   // phones: the buttons first, the settings behind ⚙
+
+resize();
+syncButtons();
+if (Q.has('cam')) startCam(); else loadPhoto(P.photoUrl);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
