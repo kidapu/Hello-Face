@@ -39,12 +39,12 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=7e0623a"></script>
-<script src="../lib/cloudfind.js?v=7e0623a"></script>
-<script src="../lib/shapenet.js?v=7e0623a"></script>
-<script src="../lib/colorfind.js?v=7e0623a"></script>
-<script src="../lib/samfind.js?v=7e0623a"></script>
-<script src="../lib/namefind.js?v=7e0623a"></script>
+<script src="../lib/doodle.js?v=2caeeb1"></script>
+<script src="../lib/cloudfind.js?v=2caeeb1"></script>
+<script src="../lib/shapenet.js?v=2caeeb1"></script>
+<script src="../lib/colorfind.js?v=2caeeb1"></script>
+<script src="../lib/samfind.js?v=2caeeb1"></script>
+<script src="../lib/namefind.js?v=2caeeb1"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -336,14 +336,14 @@ function drawFace(f, t, o) {
     body: f.body && f.body.map((q) => ({ ...pt(q), half: q.half * view.k })) }, o);
   if (P.showName && f.alpha > 0.3) drawName(f, kind);
 }
-// the animal's name under the face (with the classifier's confidence when it decided, in the debug view)
+// the animal's name under the face (with what the thing is in front: カーテンネコ)
 function drawName(f, kind) {
   const d = dprOf(), fs = Math.round(13 * d);
   let t = NAME[kind] || kind;
-  if (P.showMask && f.why && f.why.probs && f.why.by === 'learn') t += ` ${Math.round(100 * f.why.probs[f.why.kind])}%`;
   // what the thing is -> the animal (AI cut-out: its own name; colour piece: by its id)
   const ob = !P.objName || !det || f.lab < 0 ? null : det.sam ? objs[f.lab] : det.ids ? pieceName.get(det.ids[f.lab]) || {} : null;
-  if (ob) t = (ob.name || '…') + ' → ' + t;
+  // one word: カーテン + ネコ -> カーテンネコ (not yet known: …ネコ; unsure (？): just the animal)
+  if (ob) t = (ob.name === '？' ? '' : ob.name || '…') + t;
   ctx.save(); ctx.globalAlpha = f.alpha; ctx.font = `700 ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const w = ctx.measureText(t).width + fs, x = f.x, y = f.y + f.U * 1.25 + fs;
   ctx.fillStyle = '#000a'; ctx.beginPath(); ctx.roundRect(x - w / 2, y - fs * 0.8, w, fs * 1.6, fs * 0.8); ctx.fill();
@@ -387,7 +387,8 @@ function drawMask() {
     // one colour per thing (each cut-out / each piece of the colour mask), with a solid outline
     const hue = (k) => { const t = (k * 0.618034) % 1, f = (n) => { const q = (n + t * 6) % 6; return 255 * Math.max(0, Math.min(1, Math.abs(q - 3) - 1)); }; return [f(0), f(4), f(2)]; };
     for (let i = 0; i < w * h; i++) {
-      if (!det.mask[i]) { id.data[i * 4 + 3] = 0; continue; }
+      // the specks too small to be a piece (no face) are not drawn
+      if (!det.mask[i] || (L && L[i] < 0)) { id.data[i * 4 + 3] = 0; continue; }
       const k = L ? L[i] : -1, [r, g, b] = k >= 0 ? hue(id0 ? id0[k] : k) : [255, 60, 160];
       const x = i % w, edge = L && (x === 0 || x === w - 1 || i < w || i >= w * (h - 1) || L[i - 1] !== k || L[i + 1] !== k || L[i - w] !== k || L[i + w] !== k);
       id.data[i * 4] = r; id.data[i * 4 + 1] = g; id.data[i * 4 + 2] = b; id.data[i * 4 + 3] = edge ? 255 : 100;
@@ -397,8 +398,6 @@ function drawMask() {
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(maskCanvas, view.ox, view.oy, det.w * view.k, det.h * view.k);
   ctx.imageSmoothingEnabled = true;
-  ctx.strokeStyle = '#ffe000'; ctx.lineWidth = 1.5;
-  for (const f of faces) { const [x, y] = toScr(f.cx, f.cy); ctx.beginPath(); ctx.arc(x, y, f.cr * view.k, 0, Math.PI * 2); ctx.stroke(); }
 }
 
 // ---------------- sources: photo / camera
