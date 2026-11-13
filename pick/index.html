@@ -39,12 +39,12 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=b1becf9"></script>
-<script src="../lib/cloudfind.js?v=b1becf9"></script>
-<script src="../lib/shapenet.js?v=b1becf9"></script>
-<script src="../lib/colorfind.js?v=b1becf9"></script>
-<script src="../lib/samfind.js?v=b1becf9"></script>
-<script src="../lib/namefind.js?v=b1becf9"></script>
+<script src="../lib/doodle.js?v=7e0623a"></script>
+<script src="../lib/cloudfind.js?v=7e0623a"></script>
+<script src="../lib/shapenet.js?v=7e0623a"></script>
+<script src="../lib/colorfind.js?v=7e0623a"></script>
+<script src="../lib/samfind.js?v=7e0623a"></script>
+<script src="../lib/namefind.js?v=7e0623a"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -84,6 +84,7 @@ const P = {
   learnMin: 0.3,      // 'learn': below this probability for its best animal, the rules decide
   learnContext: true, // 'learn': the rules about the whole picture (very big -> whale, many small -> sheep) still first
   showName: true,     // the animal's name by each face
+  onePer: true,       // one face per colour piece (off: a big piece can hold several, e.g. touching blocks)
   expression: 'random',
   faceScale: 1.0,     // features radius / circle radius
   eyeSize: 1.2,
@@ -113,6 +114,7 @@ if (Q.has('sam')) P.sam = true;
 if (Q.has('nosam')) P.sam = false;
 if (Q.has('mask')) P.showMask = true;
 if (Q.has('nomask')) P.showMask = false;
+if (Q.has('many')) P.onePer = false;
 if (Q.has('learn')) P.kindBy = 'learn';
 if (Q.has('rule')) P.kindBy = 'rule';
 if (Q.has('noname')) P.objName = false;
@@ -209,14 +211,20 @@ function namePieces() {
   if (!P.objName || pieceBusy) return;
   const now = performance.now(), again = mode === 'cam' ? 8000 : Infinity, idOf = (f) => (f.lab >= 0 ? colorDet.ids[f.lab] : 0);
   // the ones still showing "…" first (never asked), then on the camera the ones asked long ago
-  const f = faces.find((f) => idOf(f) && !pieceName.has(idOf(f)))
+  const f = faces.find((f) => { const e = idOf(f) && pieceName.get(idOf(f)); return idOf(f) && (!e || (!e.name && now - e.t > 3000)); })
     || faces.find((f) => { const e = idOf(f) && pieceName.get(idOf(f)); return e && now - e.t > again; });
   if (!f) return;
   const id = colorDet.ids[f.lab], { w, h, label } = colorDet, mask = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) mask[i] = label[i] === f.lab ? 1 : 0;
   pieceBusy = true; const old = pieceName.get(id);
   pieceName.set(id, { name: old ? old.name : null, t: now });
-  NameFind.name(src(), mask, w, h).then((x) => { if (x) pieceName.set(id, { name: x.ja, t: performance.now() }); })
+  const first = !NameFind.ready;
+  if (first) NameFind.load(status).catch(() => {});   // shows the loading on the screen
+  // a call that never answers (a phone that dropped the worker) must not stop the others: give up after a while
+  const late = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), first ? 120000 : 15000));
+  Promise.race([NameFind.name(src(), mask, w, h), late]).then((x) => { if (x) { pieceName.set(id, { name: x.ja, t: performance.now() });
+      if (first) status(`名前: 準備できました (1つ ${x.ms} ms)`, 3000); } })
+    .catch((e) => { if (e.message !== 'timeout') throw e; console.warn('namefind timeout'); })
     .catch((e) => { console.warn('namefind', e); status('名前: ' + (e.message || e), 6000); P.objName = false; })
     .finally(() => { pieceBusy = false; if (!det.sam) namePieces(); });   // the next one (a still picture is not detected again)
 }
@@ -256,7 +264,7 @@ function placeFaces() {
   // the rules about the sky rather than the shape are off here (a very big piece -> whale, one of a flock of
   // small ones -> sheep, overcast -> one whale); a colour piece can hold many things (touching blocks), so no
   // limit of one face per piece there; an AI cut-out is one thing: one face
-  const o = { ...P, whaleArea: 9, whaleCover: 9, sheepCount: 1e9, learnContext: false, ...(det.sam ? { relMin: 0 } : { perCloud: 0 }) };
+  const o = { ...P, whaleArea: 9, whaleCover: 9, sheepCount: 1e9, learnContext: false, ...(det.sam ? { relMin: 0 } : P.onePer ? { perCloud: 1, bigCloud: 9, thinCloud: 0 } : { perCloud: 0 }) };
   const found = CloudFind.find(det, o).map((f) => Object.assign(f, {
     kind0: f.hint || KINDS[rnd() < 0.5 ? 0 : 1], kindR: KINDS[rnd() < 0.5 ? 0 : 1], expr0: EXPRS[Math.floor(rnd() * EXPRS.length)],
     kindOver: null, exprOver: null, pupil: 0.48 + rnd() * 0.17, ph: rnd() * 100, seed: Math.floor(rnd() * 1e6), alpha: 1, miss: 0, hits: 1 }));
@@ -494,6 +502,7 @@ const gk = gui.addFolder('動物');
 gk.add(P, 'kind', { '形から': 'auto', 'ネコかクマ（ランダム）': 'random', ...Object.fromEntries(KINDS.map((k) => [NAME[k] || k, k])) }).name('動物');
 gk.add(P, 'kindBy', { 'ルール': 'rule', '学習（形を見て判定）': 'learn' }).name('形からの決め方').onChange(() => { loadShapeNet(); redetect(); });
 gk.add(P, 'showName').name('名前を表示');
+gk.add(P, 'onePer').name('1つの塊に顔は1つ').onChange(() => redetect());
 gk.add(P, 'objName').name('何に見えるかを表示').onChange((v) => { if (v) { objs.forEach((o) => nameObj(o, img)); namePieces(); } });
 const ga = gui.addFolder('AIで切り抜く (Segment Anything)');
 ga.add(P, 'sam').name('AIで切り抜く').onChange(samToggled);
