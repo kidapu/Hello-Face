@@ -41,12 +41,12 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=7816749"></script>
-<script src="../lib/cloudfind.js?v=7816749"></script>
-<script src="../lib/shapenet.js?v=7816749"></script>
-<script src="../lib/colorfind.js?v=7816749"></script>
-<script src="../lib/samfind.js?v=7816749"></script>
-<script src="../lib/namefind.js?v=7816749"></script>
+<script src="../lib/doodle.js?v=cc19341"></script>
+<script src="../lib/cloudfind.js?v=cc19341"></script>
+<script src="../lib/shapenet.js?v=cc19341"></script>
+<script src="../lib/colorfind.js?v=cc19341"></script>
+<script src="../lib/samfind.js?v=cc19341"></script>
+<script src="../lib/namefind.js?v=cc19341"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -86,7 +86,8 @@ const P = {
   learnMin: 0.3,      // 'learn': below this probability for its best animal, the rules decide
   learnContext: true, // 'learn': the rules about the whole picture (very big -> whale, many small -> sheep) still first
   showName: true,     // the animal's name by each face
-  onePer: true,       // one face per colour piece (off: a big piece can hold several, e.g. touching blocks)
+  onePer: true,
+  onlyTapped: true,   // only the tapped thing (off: every place of the picked colour)       // one face per colour piece (off: a big piece can hold several, e.g. touching blocks)
   expression: 'random',
   faceScale: 1.0,     // features radius / circle radius
   eyeSize: 1.2,
@@ -117,6 +118,7 @@ if (Q.has('nosam')) P.sam = false;
 if (Q.has('mask')) P.showMask = true;
 if (Q.has('nomask')) P.showMask = false;
 if (Q.has('many')) P.onePer = false;
+if (Q.has('allcolor')) P.onlyTapped = false;
 if (Q.has('learn')) P.kindBy = 'learn';
 if (Q.has('rule')) P.kindBy = 'rule';
 if (Q.has('noname')) P.objName = false;
@@ -145,13 +147,42 @@ function detect() {
     const d0 = ColorFind.analyse(src(), sw, sh, { ...P, refs: [] });
     const [u, v] = pickAt || [0.5, 0.5];
     refs = [ColorFind.pick(d0, u * d0.w, v * d0.h, 3)];
+    selAt = [u * d0.w, v * d0.h]; selAdd = false;
   }
   colorDet = ColorFind.analyse(src(), sw, sh, { ...P, refs });
   // one label per connected piece of the colour mask: each piece's silhouette picks its animal
   { const fm = CloudFind.fromMask(colorDet.mask, colorDet.w, colorDet.h, 0.002); colorDet.label = fm.label; colorDet.comps = fm.comps;
     colorDet.ids = keepIds(fm.label, fm.comps.length); }
-  det = mode === 'photo' && P.sam && SamFind.ready && samFor === img ? samDet() : colorDet;
+  det = mode === 'photo' && P.sam && SamFind.ready && samFor === img ? samDet() : P.onlyTapped ? tappedDet() : colorDet;
   placeFaces();
+}
+// only the piece(s) that were tapped, not every place of a like colour: a tap picks the colour and the piece under
+// the finger; from then on, each detection keeps the pieces that overlap what was kept the last time (the camera
+// moves a little between two), so the same thing is followed. Lost (nothing overlaps): nothing, until it comes back
+let selAt = null, selAdd = false, selMask = null;
+function tappedDet() {
+  const { w, h, label, comps } = colorDet, n = w * h, sel = new Set();
+  if (selMask && selMask.length !== n) selMask = null;
+  if (selAt) {
+    // the piece under the finger (or the nearest one within a few cells: a tap on a speck or an edge)
+    const [tx, ty] = selAt.map(Math.floor); let k = -1;
+    for (let r = 0; r <= 6 && k < 0; r++) for (let dy = -r; dy <= r && k < 0; dy++) for (let dx = -r; dx <= r; dx++) {
+      const X = tx + dx, Y = ty + dy; if (X >= 0 && Y >= 0 && X < w && Y < h && label[Y * w + X] >= 0) { k = label[Y * w + X]; break; } }
+    if (k >= 0) sel.add(k);
+    if (selAdd && selMask) for (let i = 0; i < n; i++) if (selMask[i] && label[i] >= 0) sel.add(label[i]);
+    selAt = null;
+  } else if (selMask) {
+    const ov = new Map();
+    for (let i = 0; i < n; i++) if (selMask[i] && label[i] >= 0) ov.set(label[i], (ov.get(label[i]) || 0) + 1);
+    let best = -1, bv = 0;
+    for (const [k, v] of ov) { if (v > bv) { bv = v; best = k; } if (v >= 0.3 * comps[k].area) sel.add(k); }
+    if (best >= 0) sel.add(best);
+  }
+  if (sel.size) { selMask = new Uint8Array(n); for (let i = 0; i < n; i++) if (sel.has(label[i])) selMask[i] = 1; }
+  const mask = new Uint8Array(n), lab = new Int32Array(n).fill(-1), white = new Float32Array(n);
+  let cover = 0;
+  for (let i = 0; i < n; i++) if (sel.has(label[i])) { mask[i] = 1; lab[i] = label[i]; white[i] = colorDet.white[i]; cover++; }
+  return { ...colorDet, mask, label: lab, white, cover: cover / n, D: ColorFind.distance(mask, w, h) };
 }
 // the colour pieces are numbered anew at every detection (in scan order: one piece more or less above shifts all
 // the numbers below); a piece that overlaps most with one of the last detection keeps that one's id, so its colour
@@ -470,7 +501,8 @@ cv.addEventListener('click', e => {
     }
     const lab = ColorFind.pick(det.sam ? colorDet : det, x, y, 2);
     if (!lab) return;
-    refs = (P.tap === 'add' || e.shiftKey) ? [...refs, lab] : [lab];
+    selAdd = P.tap === 'add' || e.shiftKey;
+    refs = selAdd ? [...refs, lab] : [lab]; selAt = [x, y];
     detect(); updateView(); return;
   }
   let best = null, bd = 1e9;
@@ -533,6 +565,7 @@ const gk = gui.addFolder('動物');
 gk.add(P, 'kind', { '形から': 'auto', 'ネコかクマ（ランダム）': 'random', ...Object.fromEntries(KINDS.map((k) => [NAME[k] || k, k])) }).name('動物');
 gk.add(P, 'kindBy', { 'ルール': 'rule', '学習（形を見て判定）': 'learn' }).name('形からの決め方').onChange(() => { loadShapeNet(); redetect(); });
 gk.add(P, 'showName').name('名前を表示');
+gk.add(P, 'onlyTapped').name('タップした物だけ').onChange(() => { selMask = null; selAt = pickAt ? [pickAt[0] * colorDet.w, pickAt[1] * colorDet.h] : [colorDet.w / 2, colorDet.h / 2]; redetect(); });
 gk.add(P, 'onePer').name('1つの塊に顔は1つ').onChange(() => redetect());
 gk.add(P, 'objName').name('何に見えるかを表示').onChange((v) => { if (v) { objs.forEach((o) => nameObj(o, img)); namePieces(); } });
 const ga = gui.addFolder('AIで切り抜く (Segment Anything)');
