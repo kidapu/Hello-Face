@@ -21,7 +21,17 @@
   .btn b { font-size: 20px; line-height: 1; font-weight: 400; }
   .btn small { font-size: 10px; opacity: 0.9; }
   .btn.on { background: #3a7be0; }
-  .btn.rec { background: #e0303a; }
+  #segSw { display: flex; gap: 2px; padding: 3px; border-radius: 30px; background: #0007; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+  #segSw button { height: 50px; min-width: 58px; padding: 0 10px; border: none; border-radius: 25px; background: transparent; color: #fffc;
+    font: inherit; font-size: 13px; font-weight: 700; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
+  #segSw button b { font-size: 18px; line-height: 1; font-weight: 400; }
+  #segSw button small { font-size: 10px; }
+  #segSw button.on { background: #fff; color: #111; }
+  /* the record button: a red dot in a white ring; recording: a red square; then a disk if the share sheet did not open */
+  #bRec { width: 64px; height: 64px; padding: 0; border-radius: 50%; border: 4px solid #fff; background: #0004; display: flex; align-items: center; justify-content: center; }
+  #bRec i { display: flex; align-items: center; justify-content: center; width: 46px; height: 46px; border-radius: 50%; background: #ff2a2a; transition: all .2s; font-style: normal; }
+  #bRec.rec i { width: 24px; height: 24px; border-radius: 6px; }
+  #bRec.save i { width: auto; height: auto; background: none; font-size: 26px; }
   .btn[hidden] { display: none; }
   #shot { width: 70px; height: 70px; border-radius: 50%; border: 5px solid #fff; background: #ffffff70; }
   #shot:active { background: #fff; }
@@ -34,19 +44,19 @@
 <div id="hint"></div>
 <div id="bar">
   <button class="btn" id="bPhoto"><b>🖼</b><small>写真</small></button>
-  <button class="btn" id="bRec"><b>⏺</b><small>録画</small></button>
-  <button class="btn" id="bSeg"><b>🎨</b><small>色</small></button>
+  <button id="bRec" aria-label="録画"><i></i></button>
+  <div id="segSw" role="radiogroup" aria-label="分け方"><button data-v="color" role="radio"><b>🎨</b><small>色</small></button><button data-v="segnet" role="radio"><b>🧩</b><small>SegNet</small></button></div>
   <button class="btn" id="bAi" hidden><b>✂️</b><small>AI</small></button>
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=f43c3d9"></script>
-<script src="../lib/cloudfind.js?v=f43c3d9"></script>
-<script src="../lib/shapenet.js?v=f43c3d9"></script>
-<script src="../lib/colorfind.js?v=f43c3d9"></script>
-<script src="../lib/segnet.js?v=f43c3d9"></script>
-<script src="../lib/samfind.js?v=f43c3d9"></script>
-<script src="../lib/namefind.js?v=f43c3d9"></script>
+<script src="../lib/doodle.js?v=d2c580e"></script>
+<script src="../lib/cloudfind.js?v=d2c580e"></script>
+<script src="../lib/shapenet.js?v=d2c580e"></script>
+<script src="../lib/colorfind.js?v=d2c580e"></script>
+<script src="../lib/segnet.js?v=d2c580e"></script>
+<script src="../lib/samfind.js?v=d2c580e"></script>
+<script src="../lib/namefind.js?v=d2c580e"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -64,7 +74,7 @@ const P = {
   lumaW: 0.4,         // how much a lightness difference counts (low = shading is still the same thing)
   edgeThr: 4.0,       // cut the mask where the lightness changes faster than this (0 = no cut)
   edgeW: 0,           // extra width of the cut (px)
-  tap: 'pick',        // what a click does: pick / add / face
+  tap: 'pick',        // what a tap does: pick (add a thing / take a tapped one away) / face (change its animal)
   sam: false,         // AI cut-out (Segment Anything) on a still picture (?sam; off: not used)
   segBy: 'color',     // how the picture is split into pieces: 'color' (the tapped colour) / 'segnet' (SegNet: wall, table, curtain ...)
   segSize: 320,       // SegNet: the long side of the picture the model sees (multiples of 32)
@@ -88,8 +98,7 @@ const P = {
   learnMin: 0.3,      // 'learn': below this probability for its best animal, the rules decide
   learnContext: true, // 'learn': the rules about the whole picture (very big -> whale, many small -> sheep) still first
   showName: true,     // the animal's name by each face
-  onePer: true,
-  onlyTapped: true,   // only the tapped thing (off: every place of the picked colour)       // one face per colour piece (off: a big piece can hold several, e.g. touching blocks)
+  onePer: true,       // one face per piece (off: a big piece can hold several, e.g. touching blocks)
   expression: 'random',
   faceScale: 1.0,     // features radius / circle radius
   eyeSize: 1.2,
@@ -123,7 +132,6 @@ if (Q.has('mask')) P.showMask = true;
 if (Q.has('nomask')) P.showMask = false;
 if (Q.has('fill')) P.maskFill = true;
 if (Q.has('many')) P.onePer = false;
-if (Q.has('allcolor')) P.onlyTapped = false;
 if (Q.has('learn')) P.kindBy = 'learn';
 if (Q.has('rule')) P.kindBy = 'rule';
 if (Q.has('noname')) P.objName = false;
@@ -152,22 +160,21 @@ function detect() {
     const gw = P.detW, gh = Math.max(8, Math.round(gw * sh / sw));
     if (!segRes || segRes.W !== gw || segRes.H !== gh) return;
     colorDet = segDetOf(segRes);
-    if (!selAt && !selMask) selAt = pickAt ? [pickAt[0] * gw, pickAt[1] * gh] : [gw / 2, gh / 2];
+    if (autoPick) { autoPick = false; const [u, v] = pickAt || [0.5, 0.5]; picks = [{ at: [u * gw, v * gh], ref: null, mask: null }]; }
     colorDet.ids = keepIds(colorDet.label, colorDet.comps.length);
-    det = P.onlyTapped ? tappedDet() : colorDet;
+    det = tappedDet();
     placeFaces(); return;
   }
-  if (!refs.length) {   // first run: pick at pickAt / the centre
+  if (autoPick) {   // nothing tapped yet: the thing at pickAt / the centre
     const d0 = ColorFind.analyse(src(), sw, sh, { ...P, refs: [] });
-    const [u, v] = pickAt || [0.5, 0.5];
-    refs = [ColorFind.pick(d0, u * d0.w, v * d0.h, 3)];
-    selAt = [u * d0.w, v * d0.h]; selAdd = false;
+    const [u, v] = pickAt || [0.5, 0.5], ref = ColorFind.pick(d0, u * d0.w, v * d0.h, 3);
+    picks = [{ at: [u * d0.w, v * d0.h], ref, mask: null }]; refs = [ref]; autoPick = false;
   }
   colorDet = ColorFind.analyse(src(), sw, sh, { ...P, refs });
   // one label per connected piece of the colour mask: each piece's silhouette picks its animal
   { const fm = CloudFind.fromMask(colorDet.mask, colorDet.w, colorDet.h, 0.002); colorDet.label = fm.label; colorDet.comps = fm.comps;
     colorDet.ids = keepIds(fm.label, fm.comps.length); }
-  det = mode === 'photo' && P.sam && SamFind.ready && samFor === img ? samDet() : P.onlyTapped ? tappedDet() : colorDet;
+  det = mode === 'photo' && P.sam && SamFind.ready && samFor === img ? samDet() : tappedDet();
   placeFaces();
 }
 // ---------------- SegNet (segnet.js): every pixel gets one of 171 kinds (wall, table, curtain, person ...); the
@@ -228,40 +235,46 @@ function segDetOf(r) {
     sky: new Uint8Array(n), open: new Uint8Array(n).fill(1), seg: true };
 }
 function segChanged() {
-  selMask = null; selAt = null; prevLab = null; faces = []; segRes = null; segFor = null; segSmooth.reset();
+  picks = []; refs = []; autoPick = true; prevLab = null; faces = []; segRes = null; segFor = null; segSmooth.reset();
   if (P.segBy === 'segnet') segLoop();
   syncButtons(); redetect();
 }
-// only the piece(s) that were tapped, not every place of a like colour: a tap picks the colour and the piece under
-// the finger; from then on, each detection keeps the pieces that overlap what was kept the last time (the camera
-// moves a little between two), so the same thing is followed. Lost (nothing overlaps): nothing, until it comes back
-let selAt = null, selAdd = false, selMask = null;
+// the things that were tapped, not every place of a like colour / kind: a tap adds the piece under the finger (and,
+// splitting by colour, its colour); a tap on one already there takes it away. Each one is followed on its own: in
+// every detection it keeps the pieces that overlap what it had the last time (the camera moves a little between
+// two), all as one label (one face, one animal), even when it broke up. Lost (nothing overlaps): nothing, until it
+// comes back
+let picks = [], autoPick = true;   // picks: { at: [x, y] a fresh tap | null, ref: Lab colour | null, mask, main }
+function pieceAt(label, w, h, x, y) {   // the piece under the finger, or the nearest within a few cells (a speck, an edge)
+  const tx = Math.floor(x), ty = Math.floor(y);
+  for (let r = 0; r <= 6; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+    const X = tx + dx, Y = ty + dy; if (X >= 0 && Y >= 0 && X < w && Y < h && label[Y * w + X] >= 0) return label[Y * w + X]; }
+  return -1;
+}
 function tappedDet() {
-  const { w, h, label, comps } = colorDet, n = w * h, sel = new Set();
-  let main = -1;   // the piece it is mostly (the tap / the biggest overlap)
-  if (selMask && selMask.length !== n) selMask = null;
-  if (selAt) {
-    // the piece under the finger (or the nearest one within a few cells: a tap on a speck or an edge)
-    const [tx, ty] = selAt.map(Math.floor); let k = -1;
-    for (let r = 0; r <= 6 && k < 0; r++) for (let dy = -r; dy <= r && k < 0; dy++) for (let dx = -r; dx <= r; dx++) {
-      const X = tx + dx, Y = ty + dy; if (X >= 0 && Y >= 0 && X < w && Y < h && label[Y * w + X] >= 0) { k = label[Y * w + X]; break; } }
-    if (k >= 0) { sel.add(k); main = k; }
-    if (selAdd && selMask) for (let i = 0; i < n; i++) if (selMask[i] && label[i] >= 0) sel.add(label[i]);
-    selAt = null;
-  } else if (selMask) {
-    const ov = new Map();
-    for (let i = 0; i < n; i++) if (selMask[i] && label[i] >= 0) ov.set(label[i], (ov.get(label[i]) || 0) + 1);
-    let best = -1, bv = 0;
-    for (const [k, v] of ov) { if (v > bv) { bv = v; best = k; } if (v >= 0.3 * comps[k].area) sel.add(k); }
-    if (best >= 0) { sel.add(best); main = best; }
-  }
-  if (sel.size) { selMask = new Uint8Array(n); for (let i = 0; i < n; i++) if (sel.has(label[i])) selMask[i] = 1; }
+  const { w, h, label, comps } = colorDet, n = w * h, owner = new Int32Array(comps.length).fill(-1);
+  picks.forEach((p, j) => {
+    if (p.mask && p.mask.length !== n) p.mask = null;
+    p.main = -1;
+    if (p.at) { const k = pieceAt(label, w, h, p.at[0], p.at[1]); if (k >= 0 && owner[k] < 0) { owner[k] = j; p.main = k; } p.at = null; }
+    else if (p.mask) {
+      const ov = new Map();
+      for (let i = 0; i < n; i++) { const k = label[i]; if (p.mask[i] && k >= 0 && owner[k] < 0) ov.set(k, (ov.get(k) || 0) + 1); }
+      let bv = 0;
+      for (const [k, v] of ov) { if (v > bv) { bv = v; p.main = k; } if (v >= 0.3 * comps[k].area) owner[k] = j; }
+      if (p.main >= 0) owner[p.main] = j;
+    }
+    if (p.main >= 0) { p.mask = new Uint8Array(n); for (let i = 0; i < n; i++) if (label[i] >= 0 && owner[label[i]] === j) p.mask[i] = 1; }
+  });
+  // a tap on nothing goes; a lost one keeps its last mask (to find it again)
+  const keep = picks.map((p) => !!p.mask);
   const mask = new Uint8Array(n), lab = new Int32Array(n).fill(-1), white = new Float32Array(n);
   let cover = 0;
-  // one thing that broke into pieces in this frame is still one thing: one label (one face, one animal), unless
-  // things were added one by one (タップ: 足す)
-  const one = P.tap !== 'add' && main >= 0;
-  for (let i = 0; i < n; i++) if (sel.has(label[i])) { mask[i] = 1; lab[i] = one ? main : label[i]; white[i] = colorDet.white[i]; cover++; }
+  for (let i = 0; i < n; i++) {
+    const k = label[i]; if (k < 0 || owner[k] < 0) continue;
+    mask[i] = 1; lab[i] = picks[owner[k]].main; white[i] = colorDet.white[i]; cover++;   // the label of a thing: its main piece
+  }
+  picks = picks.filter((p, j) => keep[j]);
   return { ...colorDet, mask, label: lab, white, cover: cover / n, D: ColorFind.distance(mask, w, h) };
 }
 // the colour pieces are numbered anew at every detection (in scan order: one piece more or less above shifts all
@@ -526,7 +539,7 @@ function drawMask() {
 // ---------------- sources: photo / camera
 function stopCam() { if (stream) stream.getTracks().forEach((t) => t.stop()); stream = null; }
 function usePicture(im) {   // an Image or a canvas (a frozen camera frame)
-  stopCam(); mode = 'photo'; img = im; refs = []; objs = []; faces = [];
+  stopCam(); mode = 'photo'; img = im; refs = []; picks = []; autoPick = true; objs = []; faces = [];
   detect(); updateView(); syncButtons(); samStart();
 }
 let firstPhoto = true;
@@ -589,11 +602,17 @@ cv.addEventListener('click', e => {
         .catch(console.error).finally(() => { samBusy = false; status(''); detect(); updateView(); });
       return;
     }
-    if (P.segBy === 'segnet') { selAdd = P.tap === 'add' || e.shiftKey; selAt = [x, y]; detect(); updateView(); return; }
-    const lab = ColorFind.pick(det.sam ? colorDet : det, x, y, 2);
-    if (!lab) return;
-    selAdd = P.tap === 'add' || e.shiftKey;
-    refs = selAdd ? [...refs, lab] : [lab]; selAt = [x, y];
+    // on a thing already there (its area or its face): take it away; elsewhere: add the thing under the finger
+    const i = Math.floor(y) * det.w + Math.floor(x);
+    let j = picks.findIndex((p) => p.mask && p.mask[i]);
+    if (j < 0) for (const f of faces) if (f.lab >= 0 && Math.hypot(f.fx - x, f.fy - y) < f.r) { j = picks.findIndex((p) => p.main === f.lab); if (j >= 0) break; }
+    if (j >= 0) picks.splice(j, 1);
+    else {
+      const ref = P.segBy === 'segnet' ? null : ColorFind.pick(colorDet, x, y, 2);
+      if (P.segBy !== 'segnet' && !ref) return;
+      picks.push({ at: [x, y], ref, mask: null });
+    }
+    autoPick = false; refs = picks.map((p) => p.ref).filter(Boolean);
     detect(); updateView(); return;
   }
   let best = null, bd = 1e9;
@@ -607,12 +626,12 @@ addEventListener('resize', resize);
 // ---------------- buttons
 const $ = (id) => document.getElementById(id);
 function syncButtons() {
-  $('bSeg').innerHTML = P.segBy === 'segnet' ? '<b>🧩</b><small>SegNet</small>' : '<b>🎨</b><small>色</small>';
+  for (const b of $('segSw').children) { const on = b.dataset.v === P.segBy; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); }
   $('bAi').hidden = !Q.has('sam'); $('bAi').classList.toggle('on', P.sam); $('bAi').style.opacity = samBusy ? 0.55 : 1;
 }
 $('bPhoto').onclick = () => fileIn.click();
 $('bAi').onclick = () => { P.sam = !P.sam; gui.controllersRecursive().forEach(c => c.updateDisplay()); samToggled(); };
-$('bSeg').onclick = () => { P.segBy = P.segBy === 'segnet' ? 'color' : 'segnet'; gui.controllersRecursive().forEach((c) => c.updateDisplay()); segChanged(); };
+for (const b of $('segSw').children) b.onclick = () => { if (P.segBy === b.dataset.v) return; P.segBy = b.dataset.v; gui.controllersRecursive().forEach((c) => c.updateDisplay()); segChanged(); };
 $('bMore').onclick = () => (gui._closed ? gui.open() : gui.close());
 // ---------------- recording: what the canvas shows (faces and names; not the buttons or the settings) -> a video file
 // tap: start / stop; then the button turns to 保存 (sharing a file needs a tap of its own on a phone)
@@ -620,14 +639,15 @@ let rec = null, recFile = null, recT = 0, recIv = 0;
 const recMime = window.MediaRecorder && cv.captureStream
   ? ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m)) : null;
 if (!recMime) $('bRec').hidden = true;
-const recLabel = (b, t) => { $('bRec').innerHTML = `<b>${b}</b><small>${t}</small>`; };
+const recLabel = (st) => { const b = $('bRec'); b.classList.toggle('save', st === 'save'); b.firstChild.textContent = st === 'save' ? '💾' : '';
+  b.setAttribute('aria-label', st === 'save' ? '保存' : st === 'rec' ? '録画を止める' : '録画'); };
 async function saveRec() {
     const f = recFile;
     if (navigator.canShare && navigator.canShare({ files: [f] })) {
       // closed without saving: 💾 stays, to open it again; refused (no tap to go with it): the caller says 💾
       try { await navigator.share({ files: [f] }); } catch (e) { if (e.name === 'AbortError') return; throw e; }
     } else { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
-    recFile = null; recLabel('⏺', '録画');
+    recFile = null; recLabel('');
 }
 $('bRec').onclick = async () => {
   if (recFile) return saveRec();   // the share sheet did not open by itself: this tap opens it
@@ -637,14 +657,15 @@ $('bRec').onclick = async () => {
   catch (e) { status('録画できません (' + (e.message || e) + ')', 6000); rec = null; return; }
   rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
   rec.onstop = () => {
-    clearInterval(recIv); $('bRec').classList.remove('rec'); rec = null;
+    clearInterval(recIv); status(''); $('bRec').classList.remove('rec'); rec = null;
     const ext = recMime.startsWith('video/mp4') ? 'mp4' : 'webm', d = new Date(), z = (n) => String(n).padStart(2, '0');
     recFile = new File(chunks, `pick-doodle-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.${ext}`, { type: recMime.split(';')[0] });
-    recLabel('💾', '保存');
+    recLabel('save');
     saveRec().catch((e) => { console.warn(e); status('録画しました: 💾 で保存', 4000); });
   };
   rec.start(1000); recT = performance.now(); $('bRec').classList.add('rec');
-  const tick = () => { const s = Math.floor((performance.now() - recT) / 1000); recLabel('■', `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`); };
+  recLabel('rec');
+  const tick = () => { const s = Math.floor((performance.now() - recT) / 1000); status(`● 録画中 ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`); };
   tick(); recIv = setInterval(tick, 500);
 };
 function samToggled() { syncButtons(); if (P.sam) samStart(); else { status(''); redetect(); } }
@@ -654,32 +675,22 @@ var gui = new lil.GUI({ title: 'Pick Doodle' });
 const redetect = () => { detect(); updateView(); };
 const photoCtl = gui.add(P, 'photoUrl', ['photos/woodblocks.jpg', 'photos/leaves.jpg', 'photos/bark2.jpg', 'photos/bark.jpg', 'photos/clouds.jpg', 'photos/clouds6.jpg']).name('見本の写真').onChange(loadPhoto);
 gui.add(P, 'segBy', { '色': 'color', 'SegNet（物の種類）': 'segnet' }).name('分け方').onChange(segChanged);
-gui.add(P, 'tap', { '拾う': 'pick', '足す': 'add', 'キャラ切替': 'face' }).name('タップ');
+gui.add(P, 'tap', { '物を足す・外す': 'pick', 'キャラ切替': 'face' }).name('タップ');
 const gk = gui.addFolder('動物');
 gk.add(P, 'kind', { '形から': 'auto', 'ネコかクマ（ランダム）': 'random', ...Object.fromEntries(KINDS.map((k) => [NAME[k] || k, k])) }).name('動物');
 gk.add(P, 'kindBy', { 'ルール': 'rule', '学習（形を見て判定）': 'learn' }).name('形からの決め方').onChange(() => { pieceKind.clear(); faces = []; loadShapeNet(); redetect(); });
 gk.add(P, 'showName').name('名前を表示');
-gk.add(P, 'onlyTapped').name('タップした物だけ').onChange(() => { selMask = null; selAt = pickAt ? [pickAt[0] * colorDet.w, pickAt[1] * colorDet.h] : [colorDet.w / 2, colorDet.h / 2]; redetect(); });
 gk.add(P, 'onePer').name('1つの塊に顔は1つ').onChange(() => redetect());
 gk.add(P, 'objName').name('何に見えるかを表示').onChange((v) => { if (v) { objs.forEach((o) => nameObj(o, img)); namePieces(); } });
-const ga = gui.addFolder('AIで切り抜く (Segment Anything)');
-ga.add(P, 'sam').name('AIで切り抜く').onChange(samToggled);
-ga.add(P, 'samLevel', { '自動': 'auto', '小さく': '0', '中くらい': '1', '大きく': '2' }).name('切り抜く大きさ');
-ga.add(P, 'showMask').name('認識した範囲を表示').listen();
-ga.add(P, 'maskFill').name('範囲の中を塗る').onChange(() => { if (maskCanvas) maskCanvas._det = null; });
-ga.add(P, 'samAuto').name('色の結果から始める');
-// the model is chosen when it loads, so switching reloads the page (?sam&samlite)
-ga.add({ lite: Q.has('samlite') }, 'lite').name('軽量モデル (14MB, CPU)').onChange((v) => {
-  const q = new URLSearchParams(location.search); q.set('sam', ''); v ? q.set('samlite', '') : q.delete('samlite');
-  q.set('photo', P.photoUrl); location.search = q.toString().replace(/=(&|$)/g, '$1'); });
-ga.add({ clear() { objs = []; redetect(); } }, 'clear').name('切り抜きをリセット');
+gk.add(P, 'showMask').name('認識した範囲を表示').listen();
+gk.add(P, 'maskFill').name('範囲の中を塗る').onChange(() => { if (maskCanvas) maskCanvas._det = null; });
+gk.add({ clear() { picks = []; refs = []; autoPick = false; redetect(); } }, 'clear').name('選んだ物をぜんぶ外す');
 gui.add(P, 'fit', ['contain', 'cover']).name('表示 (写真)').onChange(updateView);
 const gd = gui.addFolder('検出');
 gd.add(P, 'tol', 4, 60, 0.5).name('色の許容範囲').onFinishChange(redetect);
 gd.add(P, 'lumaW', 0, 1, 0.01).name('明るさの差の重み').onFinishChange(redetect);
 gd.add(P, 'edgeThr', 0, 20, 0.1).name('境目で切る強さ').onFinishChange(redetect);
 gd.add(P, 'edgeW', 0, 3, 1).name('境目の太さ').onFinishChange(redetect);
-gd.add({ reset() { refs = []; redetect(); } }, 'reset').name('拾った色をリセット');
 gd.add(P, 'thrBias', -0.3, 0.3, 0.005).name('しきい値の補正').onFinishChange(redetect);
 gd.add(P, 'blur', 0, 6, 1).name('ぼかし').onFinishChange(redetect);
 gd.add(P, 'minR', 0.01, 0.15, 0.001).name('最小の顔').onFinishChange(redetect);
