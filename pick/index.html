@@ -39,12 +39,12 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=22e5899"></script>
-<script src="../lib/cloudfind.js?v=22e5899"></script>
-<script src="../lib/shapenet.js?v=22e5899"></script>
-<script src="../lib/colorfind.js?v=22e5899"></script>
-<script src="../lib/samfind.js?v=22e5899"></script>
-<script src="../lib/namefind.js?v=22e5899"></script>
+<script src="../lib/doodle.js?v=b1becf9"></script>
+<script src="../lib/cloudfind.js?v=b1becf9"></script>
+<script src="../lib/shapenet.js?v=b1becf9"></script>
+<script src="../lib/colorfind.js?v=b1becf9"></script>
+<script src="../lib/samfind.js?v=b1becf9"></script>
+<script src="../lib/namefind.js?v=b1becf9"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -159,11 +159,14 @@ function keepIds(label, n) {
     const pair = new Map();   // cur * 65536 + prev -> shared pixels
     for (let i = 0; i < label.length; i++) { const a = label[i], b = prevLab[i];
       if (a >= 0 && b >= 0) { const k = a * 65536 + b; pair.set(k, (pair.get(k) || 0) + 1); } }
-    const taken = new Set();
+    const taken = new Set(), from = new Array(n).fill(0);
     for (const [k] of [...pair].sort((x, y) => y[1] - x[1])) {   // the biggest overlaps first
       const a = Math.floor(k / 65536), id = prevIds[k % 65536];
+      if (!from[a]) from[a] = id;
       if (!ids[a] && !taken.has(id)) { ids[a] = id; taken.add(id); }
     }
+    // a piece split off another (its id was taken): a new id, but it starts with that piece's name, not "…"
+    for (let a = 0; a < n; a++) if (!ids[a] && from[a]) { ids[a] = nextPiece++; const e = pieceName.get(from[a]); if (e && e.name) pieceName.set(ids[a], { ...e }); }
   }
   for (let a = 0; a < n; a++) if (!ids[a]) ids[a] = nextPiece++;
   prevLab = Int32Array.from(label); prevIds = ids;
@@ -204,9 +207,10 @@ const pieceName = new Map();   // id -> { name, t }
 let pieceBusy = false;
 function namePieces() {
   if (!P.objName || pieceBusy) return;
-  const now = performance.now(), again = mode === 'cam' ? 5000 : Infinity;
-  const due = (id) => { const e = pieceName.get(id); return !e || now - e.t > again; };   // never asked, or long ago
-  const f = faces.find((f) => f.lab >= 0 && colorDet.ids[f.lab] && due(colorDet.ids[f.lab]));
+  const now = performance.now(), again = mode === 'cam' ? 8000 : Infinity, idOf = (f) => (f.lab >= 0 ? colorDet.ids[f.lab] : 0);
+  // the ones still showing "…" first (never asked), then on the camera the ones asked long ago
+  const f = faces.find((f) => idOf(f) && !pieceName.has(idOf(f)))
+    || faces.find((f) => { const e = idOf(f) && pieceName.get(idOf(f)); return e && now - e.t > again; });
   if (!f) return;
   const id = colorDet.ids[f.lab], { w, h, label } = colorDet, mask = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) mask[i] = label[i] === f.lab ? 1 : 0;
@@ -490,12 +494,12 @@ const gk = gui.addFolder('動物');
 gk.add(P, 'kind', { '形から': 'auto', 'ネコかクマ（ランダム）': 'random', ...Object.fromEntries(KINDS.map((k) => [NAME[k] || k, k])) }).name('動物');
 gk.add(P, 'kindBy', { 'ルール': 'rule', '学習（形を見て判定）': 'learn' }).name('形からの決め方').onChange(() => { loadShapeNet(); redetect(); });
 gk.add(P, 'showName').name('名前を表示');
+gk.add(P, 'objName').name('何に見えるかを表示').onChange((v) => { if (v) { objs.forEach((o) => nameObj(o, img)); namePieces(); } });
 const ga = gui.addFolder('AIで切り抜く (Segment Anything)');
 ga.add(P, 'sam').name('AIで切り抜く').onChange(samToggled);
 ga.add(P, 'samLevel', { '自動': 'auto', '小さく': '0', '中くらい': '1', '大きく': '2' }).name('切り抜く大きさ');
 ga.add(P, 'showMask').name('認識した範囲を表示').listen();
 ga.add(P, 'samAuto').name('色の結果から始める');
-ga.add(P, 'objName').name('物の名前を表示').onChange((v) => { if (v) objs.forEach((o) => nameObj(o, img)); });
 // the model is chosen when it loads, so switching reloads the page (?sam&samlite)
 ga.add({ lite: Q.has('samlite') }, 'lite').name('軽量モデル (14MB, CPU)').onChange((v) => {
   const q = new URLSearchParams(location.search); q.set('sam', ''); v ? q.set('samlite', '') : q.delete('samlite');
