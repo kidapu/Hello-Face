@@ -41,12 +41,12 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=cc19341"></script>
-<script src="../lib/cloudfind.js?v=cc19341"></script>
-<script src="../lib/shapenet.js?v=cc19341"></script>
-<script src="../lib/colorfind.js?v=cc19341"></script>
-<script src="../lib/samfind.js?v=cc19341"></script>
-<script src="../lib/namefind.js?v=cc19341"></script>
+<script src="../lib/doodle.js?v=4953cca"></script>
+<script src="../lib/cloudfind.js?v=4953cca"></script>
+<script src="../lib/shapenet.js?v=4953cca"></script>
+<script src="../lib/colorfind.js?v=4953cca"></script>
+<script src="../lib/samfind.js?v=4953cca"></script>
+<script src="../lib/namefind.js?v=4953cca"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -124,7 +124,7 @@ if (Q.has('rule')) P.kindBy = 'rule';
 if (Q.has('noname')) P.objName = false;
 { const q = Q.get('photo'); if (q) P.photoUrl = q.includes('/') ? q : 'photos/' + q; }
 P.shapeNet = ShapeNet;
-const loadShapeNet = () => { if (P.kindBy === 'learn') ShapeNet.load().then(() => redetect()).catch((e) => console.warn('shapenet', e)); };
+const loadShapeNet = () => { if (P.kindBy === 'learn') ShapeNet.load().then(() => { pieceKind.clear(); redetect(); }).catch((e) => console.warn('shapenet', e)); };
 loadShapeNet();
 const cv = document.getElementById('c'), ctx = cv.getContext('2d'), video = document.getElementById('v');
 let img = null, det = null, faces = [];
@@ -162,13 +162,14 @@ function detect() {
 let selAt = null, selAdd = false, selMask = null;
 function tappedDet() {
   const { w, h, label, comps } = colorDet, n = w * h, sel = new Set();
+  let main = -1;   // the piece it is mostly (the tap / the biggest overlap)
   if (selMask && selMask.length !== n) selMask = null;
   if (selAt) {
     // the piece under the finger (or the nearest one within a few cells: a tap on a speck or an edge)
     const [tx, ty] = selAt.map(Math.floor); let k = -1;
     for (let r = 0; r <= 6 && k < 0; r++) for (let dy = -r; dy <= r && k < 0; dy++) for (let dx = -r; dx <= r; dx++) {
       const X = tx + dx, Y = ty + dy; if (X >= 0 && Y >= 0 && X < w && Y < h && label[Y * w + X] >= 0) { k = label[Y * w + X]; break; } }
-    if (k >= 0) sel.add(k);
+    if (k >= 0) { sel.add(k); main = k; }
     if (selAdd && selMask) for (let i = 0; i < n; i++) if (selMask[i] && label[i] >= 0) sel.add(label[i]);
     selAt = null;
   } else if (selMask) {
@@ -176,12 +177,15 @@ function tappedDet() {
     for (let i = 0; i < n; i++) if (selMask[i] && label[i] >= 0) ov.set(label[i], (ov.get(label[i]) || 0) + 1);
     let best = -1, bv = 0;
     for (const [k, v] of ov) { if (v > bv) { bv = v; best = k; } if (v >= 0.3 * comps[k].area) sel.add(k); }
-    if (best >= 0) sel.add(best);
+    if (best >= 0) { sel.add(best); main = best; }
   }
   if (sel.size) { selMask = new Uint8Array(n); for (let i = 0; i < n; i++) if (sel.has(label[i])) selMask[i] = 1; }
   const mask = new Uint8Array(n), lab = new Int32Array(n).fill(-1), white = new Float32Array(n);
   let cover = 0;
-  for (let i = 0; i < n; i++) if (sel.has(label[i])) { mask[i] = 1; lab[i] = label[i]; white[i] = colorDet.white[i]; cover++; }
+  // one thing that broke into pieces in this frame is still one thing: one label (one face, one animal), unless
+  // things were added one by one (タップ: 足す)
+  const one = P.tap !== 'add' && main >= 0;
+  for (let i = 0; i < n; i++) if (sel.has(label[i])) { mask[i] = 1; lab[i] = one ? main : label[i]; white[i] = colorDet.white[i]; cover++; }
   return { ...colorDet, mask, label: lab, white, cover: cover / n, D: ColorFind.distance(mask, w, h) };
 }
 // the colour pieces are numbered anew at every detection (in scan order: one piece more or less above shifts all
@@ -201,7 +205,8 @@ function keepIds(label, n) {
       if (!ids[a] && !taken.has(id)) { ids[a] = id; taken.add(id); }
     }
     // a piece split off another (its id was taken): a new id, but it starts with that piece's name, not "…"
-    for (let a = 0; a < n; a++) if (!ids[a] && from[a]) { ids[a] = nextPiece++; const e = pieceName.get(from[a]); if (e && e.name) pieceName.set(ids[a], { ...e }); }
+    for (let a = 0; a < n; a++) if (!ids[a] && from[a]) { ids[a] = nextPiece++; const e = pieceName.get(from[a]); if (e && e.name) pieceName.set(ids[a], { ...e });
+      if (pieceKind.has(from[a])) pieceKind.set(ids[a], pieceKind.get(from[a])); }
   }
   for (let a = 0; a < n; a++) if (!ids[a]) ids[a] = nextPiece++;
   prevLab = Int32Array.from(label); prevIds = ids;
@@ -239,6 +244,9 @@ async function samAdd(u, v, add) {
 // the colour pieces with a face get a name too (camera and photo): one at a time, from the picture as it is,
 // kept by the piece's id (keepIds) and asked again now and then on the live camera
 const pieceName = new Map();   // id -> { name, t }
+// the animal of each colour piece, decided the first time it gets a face and kept (its shape changes a little in
+// every camera frame, which used to flip it between cat and bear)
+var pieceKind = new Map();   // id -> kind
 let pieceBusy = false;
 function namePieces() {
   if (!P.objName || pieceBusy) return;
@@ -298,7 +306,11 @@ function placeFaces() {
   // small ones -> sheep, overcast -> one whale); a colour piece can hold many things (touching blocks), so no
   // limit of one face per piece there; an AI cut-out is one thing: one face
   const o = { ...P, whaleArea: 9, whaleCover: 9, sheepCount: 1e9, learnContext: false, ...(det.sam ? { relMin: 0 } : P.onePer ? { perCloud: 1, bigCloud: 9, thinCloud: 0 } : { perCloud: 0 }) };
-  const found = CloudFind.find(det, o).map((f) => Object.assign(f, {
+  const found = CloudFind.find(det, o).map((f) => {
+    const pid = !det.sam && f.lab >= 0 && colorDet.ids ? colorDet.ids[f.lab] : 0;
+    if (pid && f.hint) { if (pieceKind.has(pid)) f.hint = pieceKind.get(pid); else pieceKind.set(pid, f.hint); }
+    f.pid = pid; return f;
+  }).map((f) => Object.assign(f, {
     kind0: f.hint || KINDS[rnd() < 0.5 ? 0 : 1], kindR: KINDS[rnd() < 0.5 ? 0 : 1], expr0: EXPRS[Math.floor(rnd() * EXPRS.length)],
     kindOver: null, exprOver: null, pupil: 0.48 + rnd() * 0.17, ph: rnd() * 100, seed: Math.floor(rnd() * 1e6), alpha: 1, miss: 0, hits: 1 }));
   faces = track(found, mode === 'cam');
@@ -308,12 +320,14 @@ function placeFaces() {
 // another thing changes nothing on the ones already there. Live camera: it moves toward the newly found place,
 // changes animal only after the new one came 3 times in a row, and fades in / out; a still picture: it jumps to
 // the new place, keeps its animal, and goes at once when its thing is gone
-const GEOM = ['cx', 'cy', 'cr', 'ears', 'paws', 'body', 'tail', 'wings', 'arms', 'hole', 'holePoly', 'why', 'lab', 'hint', 'relR'];
+const GEOM = ['pid', 'cx', 'cy', 'cr', 'ears', 'paws', 'body', 'tail', 'wings', 'arms', 'hole', 'holePoly', 'why', 'lab', 'hint', 'relR'];
 function track(found, live) {
   const k = live ? P.follow : 1, mix = (a, b) => a + k * (b - a), used = new Set(), out = [];
   for (const t of [...faces].sort((a, b) => b.hits - a.hits)) {
     let best = -1, bd = 1e9;
-    found.forEach((f, i) => { if (used.has(i)) return; const d = Math.hypot(f.fx - t.fx, f.fy - t.fy);
+    // the same colour piece (by its id) first, wherever it moved; else the nearest one close by
+    if (t.pid) best = found.findIndex((f, i) => !used.has(i) && f.pid === t.pid);
+    if (best < 0) found.forEach((f, i) => { if (used.has(i)) return; const d = Math.hypot(f.fx - t.fx, f.fy - t.fy);
       if (d < Math.max(t.r, f.r) * 1.3 && d < bd) { bd = d; best = i; } });
     if (best < 0) { t.miss++; if (live && t.miss < 4) out.push(t); continue; }
     const f = found[best]; used.add(best);
@@ -563,7 +577,7 @@ const photoCtl = gui.add(P, 'photoUrl', ['photos/woodblocks.jpg', 'photos/leaves
 gui.add(P, 'tap', { '拾う': 'pick', '足す': 'add', 'キャラ切替': 'face' }).name('タップ');
 const gk = gui.addFolder('動物');
 gk.add(P, 'kind', { '形から': 'auto', 'ネコかクマ（ランダム）': 'random', ...Object.fromEntries(KINDS.map((k) => [NAME[k] || k, k])) }).name('動物');
-gk.add(P, 'kindBy', { 'ルール': 'rule', '学習（形を見て判定）': 'learn' }).name('形からの決め方').onChange(() => { loadShapeNet(); redetect(); });
+gk.add(P, 'kindBy', { 'ルール': 'rule', '学習（形を見て判定）': 'learn' }).name('形からの決め方').onChange(() => { pieceKind.clear(); faces = []; loadShapeNet(); redetect(); });
 gk.add(P, 'showName').name('名前を表示');
 gk.add(P, 'onlyTapped').name('タップした物だけ').onChange(() => { selMask = null; selAt = pickAt ? [pickAt[0] * colorDet.w, pickAt[1] * colorDet.h] : [colorDet.w / 2, colorDet.h / 2]; redetect(); });
 gk.add(P, 'onePer').name('1つの塊に顔は1つ').onChange(() => redetect());
