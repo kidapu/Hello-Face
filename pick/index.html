@@ -34,24 +34,22 @@
 <div id="hint"></div>
 <div id="bar">
   <button class="btn" id="bPhoto"><b>🖼</b><small>写真</small></button>
-  <button class="btn" id="bCam"><b>📷</b><small>カメラ</small></button>
-  <button class="btn" id="shot" aria-label="止める" hidden></button>
   <button class="btn" id="bRec"><b>⏺</b><small>録画</small></button>
   <button class="btn" id="bAi"><b>✂️</b><small>AI</small></button>
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=cbcc76e"></script>
-<script src="../lib/cloudfind.js?v=cbcc76e"></script>
-<script src="../lib/shapenet.js?v=cbcc76e"></script>
-<script src="../lib/colorfind.js?v=cbcc76e"></script>
-<script src="../lib/samfind.js?v=cbcc76e"></script>
-<script src="../lib/namefind.js?v=cbcc76e"></script>
+<script src="../lib/doodle.js?v=38f9f74"></script>
+<script src="../lib/cloudfind.js?v=38f9f74"></script>
+<script src="../lib/shapenet.js?v=38f9f74"></script>
+<script src="../lib/colorfind.js?v=38f9f74"></script>
+<script src="../lib/samfind.js?v=38f9f74"></script>
+<script src="../lib/namefind.js?v=38f9f74"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
 // (the shape rules CloudFind.RULES, or the small CNN shapenet.js), as on the cloud camera.
-// Sources: a photo, or the camera (live, colour mode; the 📸 button freezes the frame into a photo).
+// Sources: a photo, or the camera (live, colour mode; ✂️AI freezes the frame into a photo).
 // Option "AIで切り抜く": Segment Anything (samfind.js, runs in the browser) cuts out the tapped thing
 // instead; one face per thing (on a still picture: turning it on with the camera live freezes the frame).
 
@@ -477,7 +475,7 @@ async function startCam() {
     video.srcObject = stream; await video.play();
     mode = 'cam'; faces = []; objs = []; lastDet = 0;
     // keep the picked colours; with none yet, the first frame picks the centre
-    syncButtons(); status('拾いたい色のものをタップ / 📸で止める', 4000);
+    syncButtons(); status('拾いたい色のものをタップ', 4000);
     return true;
   } catch (e) { status('カメラを開けませんでした: ' + (e.name || e.message || e), 6000); return false; }
 }
@@ -532,12 +530,9 @@ addEventListener('resize', resize);
 // ---------------- buttons
 const $ = (id) => document.getElementById(id);
 function syncButtons() {
-  $('bCam').hidden = mode === 'cam'; $('shot').hidden = mode !== 'cam';
   $('bAi').classList.toggle('on', P.sam); $('bAi').style.opacity = samBusy ? 0.55 : 1;
 }
 $('bPhoto').onclick = () => fileIn.click();
-$('bCam').onclick = () => startCam();
-$('shot').onclick = () => freeze();
 $('bAi').onclick = () => { P.sam = !P.sam; gui.controllersRecursive().forEach(c => c.updateDisplay()); samToggled(); };
 $('bMore').onclick = () => (gui._closed ? gui.open() : gui.close());
 // ---------------- recording: what the canvas shows (faces and names; not the buttons or the settings) -> a video file
@@ -547,14 +542,16 @@ const recMime = window.MediaRecorder && cv.captureStream
   ? ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m)) : null;
 if (!recMime) $('bRec').hidden = true;
 const recLabel = (b, t) => { $('bRec').innerHTML = `<b>${b}</b><small>${t}</small>`; };
-$('bRec').onclick = async () => {
-  if (recFile) {   // save what was recorded
+async function saveRec() {
     const f = recFile;
     if (navigator.canShare && navigator.canShare({ files: [f] })) {
-      try { await navigator.share({ files: [f] }); } catch (e) { if (e.name === 'AbortError') return; console.warn(e); }
+      // closed without saving: 💾 stays, to open it again; refused (no tap to go with it): the caller says 💾
+      try { await navigator.share({ files: [f] }); } catch (e) { if (e.name === 'AbortError') return; throw e; }
     } else { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
-    recFile = null; recLabel('⏺', '録画'); return;
-  }
+    recFile = null; recLabel('⏺', '録画');
+}
+$('bRec').onclick = async () => {
+  if (recFile) return saveRec();   // the share sheet did not open by itself: this tap opens it
   if (rec) { rec.stop(); return; }
   const chunks = [];
   try { rec = new MediaRecorder(cv.captureStream(30), { mimeType: recMime, videoBitsPerSecond: 8e6 }); }
@@ -564,7 +561,8 @@ $('bRec').onclick = async () => {
     clearInterval(recIv); $('bRec').classList.remove('rec'); rec = null;
     const ext = recMime.startsWith('video/mp4') ? 'mp4' : 'webm', d = new Date(), z = (n) => String(n).padStart(2, '0');
     recFile = new File(chunks, `pick-doodle-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.${ext}`, { type: recMime.split(';')[0] });
-    recLabel('💾', '保存'); status('録画しました: 💾 で保存', 4000);
+    recLabel('💾', '保存');
+    saveRec().catch((e) => { console.warn(e); status('録画しました: 💾 で保存', 4000); });
   };
   rec.start(1000); recT = performance.now(); $('bRec').classList.add('rec');
   const tick = () => { const s = Math.floor((performance.now() - recT) / 1000); recLabel('■', `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`); };
