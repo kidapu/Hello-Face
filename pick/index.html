@@ -39,11 +39,12 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=5bf8df2"></script>
-<script src="../lib/cloudfind.js?v=5bf8df2"></script>
-<script src="../lib/shapenet.js?v=5bf8df2"></script>
-<script src="../lib/colorfind.js?v=5bf8df2"></script>
-<script src="../lib/samfind.js?v=5bf8df2"></script>
+<script src="../lib/doodle.js?v=1c613ab"></script>
+<script src="../lib/cloudfind.js?v=1c613ab"></script>
+<script src="../lib/shapenet.js?v=1c613ab"></script>
+<script src="../lib/colorfind.js?v=1c613ab"></script>
+<script src="../lib/samfind.js?v=1c613ab"></script>
+<script src="../lib/namefind.js?v=1c613ab"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -65,6 +66,7 @@ const P = {
   sam: true,          // AI cut-out (Segment Anything) instead of the colour mask
   samLevel: '0',      // which of SAM's 3 masks: auto (best score) / 0 small part / 1 / 2 whole thing
   samAuto: true,      // when turned on: cut out the things the colour mode found
+  objName: true,      // what each cut-out is called (namefind.js: MobileCLIP2 + ~6400 Japanese words), by its face
   blur: 1.0,          // detector blur (px at detector resolution)
   thrBias: 0.0,       // nudge the automatic threshold (+ = only the whitest clouds)
   minR: 0.03,        // smallest face (inscribed circle radius / photo width)
@@ -113,6 +115,7 @@ if (Q.has('mask')) P.showMask = true;
 if (Q.has('nomask')) P.showMask = false;
 if (Q.has('learn')) P.kindBy = 'learn';
 if (Q.has('rule')) P.kindBy = 'rule';
+if (Q.has('noname')) P.objName = false;
 { const q = Q.get('photo'); if (q) P.photoUrl = q.includes('/') ? q : 'photos/' + q; }
 P.shapeNet = ShapeNet;
 const loadShapeNet = () => { if (P.kindBy === 'learn') ShapeNet.load().then(() => redetect()).catch((e) => console.warn('shapenet', e)); };
@@ -170,7 +173,17 @@ async function samAdd(u, v, add) {
   // the same thing again (e.g. two colour faces on one block): keep one
   for (const o of objs) { let both = 0; for (let i = 0; i < w * h; i++) both += o.mask[i] & r.mask[i];
     if (both > 0.6 * Math.min(o.area, r.area)) return false; }
-  r.id = nextObj++; objs.push(r); return true;   // id: its colour in the debug view stays when others come and go
+  r.id = nextObj++; objs.push(r);   // id: its colour in the debug view stays when others come and go
+  nameObj(r, img); return true;
+}
+// what the cut-out is (in the background: the face shows it when it is known)
+function nameObj(r, pic) {
+  if (!P.objName || r.name !== undefined) return;
+  r.name = null; const { w, h } = colorDet;
+  NameFind.name(pic, r.mask, w, h).then((x) => {
+    if (!x) return; r.name = x.ja; r.top = x.top;
+    console.log('[name]', x.ms + 'ms', x.top.map(([j, s]) => j + ' ' + s).join(' / '));
+  }).catch((e) => { console.warn('namefind', e); status('名前: ' + (e.message || e), 6000); });
 }
 async function samStart() {
   if (!P.sam || samBusy) return;
@@ -276,6 +289,8 @@ function drawName(f, kind) {
   const d = dprOf(), fs = Math.round(13 * d);
   let t = NAME[kind] || kind;
   if (P.showMask && f.why && f.why.probs && f.why.by === 'learn') t += ` ${Math.round(100 * f.why.probs[f.why.kind])}%`;
+  const ob = P.objName && det && det.sam && f.lab >= 0 ? objs[f.lab] : null;   // AI cut-out: what it is -> the animal
+  if (ob) t = (ob.name || '…') + ' → ' + t;
   ctx.save(); ctx.globalAlpha = f.alpha; ctx.font = `700 ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const w = ctx.measureText(t).width + fs, x = f.x, y = f.y + f.U * 1.25 + fs;
   ctx.fillStyle = '#000a'; ctx.beginPath(); ctx.roundRect(x - w / 2, y - fs * 0.8, w, fs * 1.6, fs * 0.8); ctx.fill();
@@ -438,6 +453,7 @@ ga.add(P, 'sam').name('AIで切り抜く').onChange(samToggled);
 ga.add(P, 'samLevel', { '自動': 'auto', '小さく': '0', '中くらい': '1', '大きく': '2' }).name('切り抜く大きさ');
 ga.add(P, 'showMask').name('認識した範囲を表示').listen();
 ga.add(P, 'samAuto').name('色の結果から始める');
+ga.add(P, 'objName').name('物の名前を表示').onChange((v) => { if (v) objs.forEach((o) => nameObj(o, img)); });
 // the model is chosen when it loads, so switching reloads the page (?sam&samlite)
 ga.add({ lite: Q.has('samlite') }, 'lite').name('軽量モデル (14MB, CPU)').onChange((v) => {
   const q = new URLSearchParams(location.search); q.set('sam', ''); v ? q.set('samlite', '') : q.delete('samlite');
