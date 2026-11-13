@@ -39,12 +39,12 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=5d7a5c7"></script>
-<script src="../lib/cloudfind.js?v=5d7a5c7"></script>
-<script src="../lib/shapenet.js?v=5d7a5c7"></script>
-<script src="../lib/colorfind.js?v=5d7a5c7"></script>
-<script src="../lib/samfind.js?v=5d7a5c7"></script>
-<script src="../lib/namefind.js?v=5d7a5c7"></script>
+<script src="../lib/doodle.js?v=edc9770"></script>
+<script src="../lib/cloudfind.js?v=edc9770"></script>
+<script src="../lib/shapenet.js?v=edc9770"></script>
+<script src="../lib/colorfind.js?v=edc9770"></script>
+<script src="../lib/samfind.js?v=edc9770"></script>
+<script src="../lib/namefind.js?v=edc9770"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -144,9 +144,30 @@ function detect() {
   }
   colorDet = ColorFind.analyse(src(), sw, sh, { ...P, refs });
   // one label per connected piece of the colour mask: each piece's silhouette picks its animal
-  { const fm = CloudFind.fromMask(colorDet.mask, colorDet.w, colorDet.h, 0.002); colorDet.label = fm.label; colorDet.comps = fm.comps; }
+  { const fm = CloudFind.fromMask(colorDet.mask, colorDet.w, colorDet.h, 0.002); colorDet.label = fm.label; colorDet.comps = fm.comps;
+    colorDet.ids = keepIds(fm.label, fm.comps.length); }
   det = mode === 'photo' && P.sam && SamFind.ready && samFor === img ? samDet() : colorDet;
   placeFaces();
+}
+// the colour pieces are numbered anew at every detection (in scan order: one piece more or less above shifts all
+// the numbers below); a piece that overlaps most with one of the last detection keeps that one's id, so its colour
+// in the debug view stays
+let prevLab = null, prevIds = null, nextPiece = 1;
+function keepIds(label, n) {
+  const ids = new Array(n).fill(0);
+  if (prevLab && prevLab.length === label.length) {
+    const pair = new Map();   // cur * 65536 + prev -> shared pixels
+    for (let i = 0; i < label.length; i++) { const a = label[i], b = prevLab[i];
+      if (a >= 0 && b >= 0) { const k = a * 65536 + b; pair.set(k, (pair.get(k) || 0) + 1); } }
+    const taken = new Set();
+    for (const [k] of [...pair].sort((x, y) => y[1] - x[1])) {   // the biggest overlaps first
+      const a = Math.floor(k / 65536), id = prevIds[k % 65536];
+      if (!ids[a] && !taken.has(id)) { ids[a] = id; taken.add(id); }
+    }
+  }
+  for (let a = 0; a < n; a++) if (!ids[a]) ids[a] = nextPiece++;
+  prevLab = Int32Array.from(label); prevIds = ids;
+  return ids;
 }
 // ---------------- AI cut-out (samfind.js)
 let colorDet = null, objs = [], samBusy = false, samFor = null, nextObj = 1;
@@ -367,7 +388,7 @@ function loadPhoto(url) {
 }
 async function startCam() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    status('このページではカメラが使えません（https:// のアドレスで開いてください）', 6000); return;
+    status('このページではカメラが使えません（https:// のアドレスで開いてください）', 6000); return false;
   }
   try {
     stopCam();
@@ -377,7 +398,8 @@ async function startCam() {
     mode = 'cam'; faces = []; objs = []; lastDet = 0;
     // keep the picked colours; with none yet, the first frame picks the centre
     syncButtons(); status('拾いたい色のものをタップ / 📸で止める', 4000);
-  } catch (e) { status('カメラを開けませんでした: ' + (e.name || e.message || e), 6000); }
+    return true;
+  } catch (e) { status('カメラを開けませんでした: ' + (e.name || e.message || e), 6000); return false; }
 }
 // the camera frame as it is now -> a still picture (the colours picked so far stay)
 function freeze() {
@@ -504,7 +526,9 @@ if (innerWidth < 700) gui.close();   // phones: the buttons first, the settings 
 
 resize();
 syncButtons();
-if (Q.has('cam')) startCam(); else loadPhoto(P.photoUrl);
+// starts on the camera (a photo when there is none, it is refused, or ?nocam / ?photo=...)
+if (Q.has('cam') || !(Q.has('nocam') || Q.has('photo'))) startCam().then((ok) => { if (!ok) loadPhoto(P.photoUrl); });
+else loadPhoto(P.photoUrl);
 requestAnimationFrame(frame);
 </script>
 </body>
