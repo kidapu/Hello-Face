@@ -39,12 +39,12 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=edc9770"></script>
-<script src="../lib/cloudfind.js?v=edc9770"></script>
-<script src="../lib/shapenet.js?v=edc9770"></script>
-<script src="../lib/colorfind.js?v=edc9770"></script>
-<script src="../lib/samfind.js?v=edc9770"></script>
-<script src="../lib/namefind.js?v=edc9770"></script>
+<script src="../lib/doodle.js?v=22e5899"></script>
+<script src="../lib/cloudfind.js?v=22e5899"></script>
+<script src="../lib/shapenet.js?v=22e5899"></script>
+<script src="../lib/colorfind.js?v=22e5899"></script>
+<script src="../lib/samfind.js?v=22e5899"></script>
+<script src="../lib/namefind.js?v=22e5899"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -198,6 +198,24 @@ async function samAdd(u, v, add) {
   nameObj(r, img); return true;
 }
 // what the cut-out is (in the background: the face shows it when it is known)
+// the colour pieces with a face get a name too (camera and photo): one at a time, from the picture as it is,
+// kept by the piece's id (keepIds) and asked again now and then on the live camera
+const pieceName = new Map();   // id -> { name, t }
+let pieceBusy = false;
+function namePieces() {
+  if (!P.objName || pieceBusy) return;
+  const now = performance.now(), again = mode === 'cam' ? 5000 : Infinity;
+  const due = (id) => { const e = pieceName.get(id); return !e || now - e.t > again; };   // never asked, or long ago
+  const f = faces.find((f) => f.lab >= 0 && colorDet.ids[f.lab] && due(colorDet.ids[f.lab]));
+  if (!f) return;
+  const id = colorDet.ids[f.lab], { w, h, label } = colorDet, mask = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) mask[i] = label[i] === f.lab ? 1 : 0;
+  pieceBusy = true; const old = pieceName.get(id);
+  pieceName.set(id, { name: old ? old.name : null, t: now });
+  NameFind.name(src(), mask, w, h).then((x) => { if (x) pieceName.set(id, { name: x.ja, t: performance.now() }); })
+    .catch((e) => { console.warn('namefind', e); status('名前: ' + (e.message || e), 6000); P.objName = false; })
+    .finally(() => { pieceBusy = false; if (!det.sam) namePieces(); });   // the next one (a still picture is not detected again)
+}
 function nameObj(r, pic) {
   if (!P.objName || r.name !== undefined) return;
   r.name = null; const { w, h } = colorDet;
@@ -239,6 +257,7 @@ function placeFaces() {
     kind0: f.hint || KINDS[rnd() < 0.5 ? 0 : 1], kindR: KINDS[rnd() < 0.5 ? 0 : 1], expr0: EXPRS[Math.floor(rnd() * EXPRS.length)],
     kindOver: null, exprOver: null, pupil: 0.48 + rnd() * 0.17, ph: rnd() * 100, seed: Math.floor(rnd() * 1e6), alpha: 1, miss: 0, hits: 1 }));
   faces = track(found, mode === 'cam');
+  if (!det.sam) namePieces();
 }
 // each face keeps its character (animal, expression, blink ...) from detection to detection, so adding or removing
 // another thing changes nothing on the ones already there. Live camera: it moves toward the newly found place,
@@ -310,7 +329,8 @@ function drawName(f, kind) {
   const d = dprOf(), fs = Math.round(13 * d);
   let t = NAME[kind] || kind;
   if (P.showMask && f.why && f.why.probs && f.why.by === 'learn') t += ` ${Math.round(100 * f.why.probs[f.why.kind])}%`;
-  const ob = P.objName && det && det.sam && f.lab >= 0 ? objs[f.lab] : null;   // AI cut-out: what it is -> the animal
+  // what the thing is -> the animal (AI cut-out: its own name; colour piece: by its id)
+  const ob = !P.objName || !det || f.lab < 0 ? null : det.sam ? objs[f.lab] : det.ids ? pieceName.get(det.ids[f.lab]) || {} : null;
   if (ob) t = (ob.name || '…') + ' → ' + t;
   ctx.save(); ctx.globalAlpha = f.alpha; ctx.font = `700 ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const w = ctx.measureText(t).width + fs, x = f.x, y = f.y + f.U * 1.25 + fs;
