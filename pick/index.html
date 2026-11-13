@@ -39,12 +39,12 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=2caeeb1"></script>
-<script src="../lib/cloudfind.js?v=2caeeb1"></script>
-<script src="../lib/shapenet.js?v=2caeeb1"></script>
-<script src="../lib/colorfind.js?v=2caeeb1"></script>
-<script src="../lib/samfind.js?v=2caeeb1"></script>
-<script src="../lib/namefind.js?v=2caeeb1"></script>
+<script src="../lib/doodle.js?v=c9d4bdf"></script>
+<script src="../lib/cloudfind.js?v=c9d4bdf"></script>
+<script src="../lib/shapenet.js?v=c9d4bdf"></script>
+<script src="../lib/colorfind.js?v=c9d4bdf"></script>
+<script src="../lib/samfind.js?v=c9d4bdf"></script>
+<script src="../lib/namefind.js?v=c9d4bdf"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -342,8 +342,8 @@ function drawName(f, kind) {
   let t = NAME[kind] || kind;
   // what the thing is -> the animal (AI cut-out: its own name; colour piece: by its id)
   const ob = !P.objName || !det || f.lab < 0 ? null : det.sam ? objs[f.lab] : det.ids ? pieceName.get(det.ids[f.lab]) || {} : null;
-  // one word: カーテン + ネコ -> カーテンネコ (not yet known: …ネコ; unsure (？): just the animal)
-  if (ob) t = (ob.name === '？' ? '' : ob.name || '…') + t;
+  // one word: カーテン + ネコ -> カーテンネコ (not yet known, or unsure (？): just the animal)
+  if (ob && ob.name && ob.name !== '？') t = ob.name + t;
   ctx.save(); ctx.globalAlpha = f.alpha; ctx.font = `700 ${fs}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const w = ctx.measureText(t).width + fs, x = f.x, y = f.y + f.U * 1.25 + fs;
   ctx.fillStyle = '#000a'; ctx.beginPath(); ctx.roundRect(x - w / 2, y - fs * 0.8, w, fs * 1.6, fs * 0.8); ctx.fill();
