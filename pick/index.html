@@ -21,6 +21,7 @@
   .btn b { font-size: 20px; line-height: 1; font-weight: 400; }
   .btn small { font-size: 10px; opacity: 0.9; }
   .btn.on { background: #3a7be0; }
+  .btn.rec { background: #e0303a; }
   .btn[hidden] { display: none; }
   #shot { width: 70px; height: 70px; border-radius: 50%; border: 5px solid #fff; background: #ffffff70; }
   #shot:active { background: #fff; }
@@ -35,16 +36,17 @@
   <button class="btn" id="bPhoto"><b>🖼</b><small>写真</small></button>
   <button class="btn" id="bCam"><b>📷</b><small>カメラ</small></button>
   <button class="btn" id="shot" aria-label="止める" hidden></button>
+  <button class="btn" id="bRec"><b>⏺</b><small>録画</small></button>
   <button class="btn" id="bAi"><b>✂️</b><small>AI</small></button>
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=c9d4bdf"></script>
-<script src="../lib/cloudfind.js?v=c9d4bdf"></script>
-<script src="../lib/shapenet.js?v=c9d4bdf"></script>
-<script src="../lib/colorfind.js?v=c9d4bdf"></script>
-<script src="../lib/samfind.js?v=c9d4bdf"></script>
-<script src="../lib/namefind.js?v=c9d4bdf"></script>
+<script src="../lib/doodle.js?v=7816749"></script>
+<script src="../lib/cloudfind.js?v=7816749"></script>
+<script src="../lib/shapenet.js?v=7816749"></script>
+<script src="../lib/colorfind.js?v=7816749"></script>
+<script src="../lib/samfind.js?v=7816749"></script>
+<script src="../lib/namefind.js?v=7816749"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -490,6 +492,36 @@ $('bCam').onclick = () => startCam();
 $('shot').onclick = () => freeze();
 $('bAi').onclick = () => { P.sam = !P.sam; gui.controllersRecursive().forEach(c => c.updateDisplay()); samToggled(); };
 $('bMore').onclick = () => (gui._closed ? gui.open() : gui.close());
+// ---------------- recording: what the canvas shows (faces and names; not the buttons or the settings) -> a video file
+// tap: start / stop; then the button turns to 保存 (sharing a file needs a tap of its own on a phone)
+let rec = null, recFile = null, recT = 0, recIv = 0;
+const recMime = window.MediaRecorder && cv.captureStream
+  ? ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m)) : null;
+if (!recMime) $('bRec').hidden = true;
+const recLabel = (b, t) => { $('bRec').innerHTML = `<b>${b}</b><small>${t}</small>`; };
+$('bRec').onclick = async () => {
+  if (recFile) {   // save what was recorded
+    const f = recFile;
+    if (navigator.canShare && navigator.canShare({ files: [f] })) {
+      try { await navigator.share({ files: [f] }); } catch (e) { if (e.name === 'AbortError') return; console.warn(e); }
+    } else { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
+    recFile = null; recLabel('⏺', '録画'); return;
+  }
+  if (rec) { rec.stop(); return; }
+  const chunks = [];
+  try { rec = new MediaRecorder(cv.captureStream(30), { mimeType: recMime, videoBitsPerSecond: 8e6 }); }
+  catch (e) { status('録画できません (' + (e.message || e) + ')', 6000); rec = null; return; }
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  rec.onstop = () => {
+    clearInterval(recIv); $('bRec').classList.remove('rec'); rec = null;
+    const ext = recMime.startsWith('video/mp4') ? 'mp4' : 'webm', d = new Date(), z = (n) => String(n).padStart(2, '0');
+    recFile = new File(chunks, `pick-doodle-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.${ext}`, { type: recMime.split(';')[0] });
+    recLabel('💾', '保存'); status('録画しました: 💾 で保存', 4000);
+  };
+  rec.start(1000); recT = performance.now(); $('bRec').classList.add('rec');
+  const tick = () => { const s = Math.floor((performance.now() - recT) / 1000); recLabel('■', `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`); };
+  tick(); recIv = setInterval(tick, 500);
+};
 function samToggled() { syncButtons(); if (P.sam) samStart(); else { status(''); redetect(); } }
 
 // ---------------- GUI
