@@ -41,12 +41,12 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=4953cca"></script>
-<script src="../lib/cloudfind.js?v=4953cca"></script>
-<script src="../lib/shapenet.js?v=4953cca"></script>
-<script src="../lib/colorfind.js?v=4953cca"></script>
-<script src="../lib/samfind.js?v=4953cca"></script>
-<script src="../lib/namefind.js?v=4953cca"></script>
+<script src="../lib/doodle.js?v=cbcc76e"></script>
+<script src="../lib/cloudfind.js?v=cbcc76e"></script>
+<script src="../lib/shapenet.js?v=cbcc76e"></script>
+<script src="../lib/colorfind.js?v=cbcc76e"></script>
+<script src="../lib/samfind.js?v=cbcc76e"></script>
+<script src="../lib/namefind.js?v=cbcc76e"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -110,6 +110,7 @@ const P = {
   // misc
   seed: 1,
   showMask: true,
+  maskFill: false,    // the recognised area: filled (light) inside, or only its outline
 };
 
 const Q = new URLSearchParams(location.search);
@@ -117,6 +118,7 @@ if (Q.has('sam')) P.sam = true;
 if (Q.has('nosam')) P.sam = false;
 if (Q.has('mask')) P.showMask = true;
 if (Q.has('nomask')) P.showMask = false;
+if (Q.has('fill')) P.maskFill = true;
 if (Q.has('many')) P.onePer = false;
 if (Q.has('allcolor')) P.onlyTapped = false;
 if (Q.has('learn')) P.kindBy = 'learn';
@@ -438,7 +440,7 @@ function drawMask() {
       if (!det.mask[i] || (L && L[i] < 0)) { id.data[i * 4 + 3] = 0; continue; }
       const k = L ? L[i] : -1, [r, g, b] = k >= 0 ? hue(id0 ? id0[k] : k) : [255, 60, 160];
       const x = i % w, edge = L && (x === 0 || x === w - 1 || i < w || i >= w * (h - 1) || L[i - 1] !== k || L[i + 1] !== k || L[i - w] !== k || L[i + w] !== k);
-      id.data[i * 4] = r; id.data[i * 4 + 1] = g; id.data[i * 4 + 2] = b; id.data[i * 4 + 3] = edge ? 255 : 100;
+      id.data[i * 4] = r; id.data[i * 4 + 1] = g; id.data[i * 4 + 2] = b; id.data[i * 4 + 3] = edge ? 255 : P.maskFill ? 100 : 0;
     }
     m.putImageData(id, 0, 0);
   }
@@ -586,6 +588,7 @@ const ga = gui.addFolder('AIで切り抜く (Segment Anything)');
 ga.add(P, 'sam').name('AIで切り抜く').onChange(samToggled);
 ga.add(P, 'samLevel', { '自動': 'auto', '小さく': '0', '中くらい': '1', '大きく': '2' }).name('切り抜く大きさ');
 ga.add(P, 'showMask').name('認識した範囲を表示').listen();
+ga.add(P, 'maskFill').name('範囲の中を塗る').onChange(() => { if (maskCanvas) maskCanvas._det = null; });
 ga.add(P, 'samAuto').name('色の結果から始める');
 // the model is chosen when it loads, so switching reloads the page (?sam&samlite)
 ga.add({ lite: Q.has('samlite') }, 'lite').name('軽量モデル (14MB, CPU)').onChange((v) => {
