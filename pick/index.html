@@ -35,16 +35,18 @@
 <div id="bar">
   <button class="btn" id="bPhoto"><b>🖼</b><small>写真</small></button>
   <button class="btn" id="bRec"><b>⏺</b><small>録画</small></button>
-  <button class="btn" id="bAi"><b>✂️</b><small>AI</small></button>
+  <button class="btn" id="bSeg"><b>🎨</b><small>色</small></button>
+  <button class="btn" id="bAi" hidden><b>✂️</b><small>AI</small></button>
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=38f9f74"></script>
-<script src="../lib/cloudfind.js?v=38f9f74"></script>
-<script src="../lib/shapenet.js?v=38f9f74"></script>
-<script src="../lib/colorfind.js?v=38f9f74"></script>
-<script src="../lib/samfind.js?v=38f9f74"></script>
-<script src="../lib/namefind.js?v=38f9f74"></script>
+<script src="../lib/doodle.js?v=f43c3d9"></script>
+<script src="../lib/cloudfind.js?v=f43c3d9"></script>
+<script src="../lib/shapenet.js?v=f43c3d9"></script>
+<script src="../lib/colorfind.js?v=f43c3d9"></script>
+<script src="../lib/segnet.js?v=f43c3d9"></script>
+<script src="../lib/samfind.js?v=f43c3d9"></script>
+<script src="../lib/namefind.js?v=f43c3d9"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -63,7 +65,9 @@ const P = {
   edgeThr: 4.0,       // cut the mask where the lightness changes faster than this (0 = no cut)
   edgeW: 0,           // extra width of the cut (px)
   tap: 'pick',        // what a click does: pick / add / face
-  sam: true,          // AI cut-out (Segment Anything) instead of the colour mask
+  sam: false,         // AI cut-out (Segment Anything) on a still picture (?sam; off: not used)
+  segBy: 'color',     // how the picture is split into pieces: 'color' (the tapped colour) / 'segnet' (SegNet: wall, table, curtain ...)
+  segSize: 320,       // SegNet: the long side of the picture the model sees (multiples of 32)
   samLevel: '0',      // which of SAM's 3 masks: auto (best score) / 0 small part / 1 / 2 whole thing
   samAuto: true,      // when turned on: cut out the things the colour mode found
   objName: true,      // what each cut-out is called (namefind.js: MobileCLIP2 + ~6400 Japanese words), by its face
@@ -114,6 +118,7 @@ const P = {
 const Q = new URLSearchParams(location.search);
 if (Q.has('sam')) P.sam = true;
 if (Q.has('nosam')) P.sam = false;
+if (Q.has('segnet')) P.segBy = 'segnet';
 if (Q.has('mask')) P.showMask = true;
 if (Q.has('nomask')) P.showMask = false;
 if (Q.has('fill')) P.maskFill = true;
@@ -143,6 +148,15 @@ let pickAt = null;   // [u, v] 0..1 of the first pick (?pick=u,v), default: the 
 function detect() {
   const [sw, sh] = srcSize();
   if (!sw || !sh) return;
+  if (P.segBy === 'segnet') {   // the latest SegNet result (it runs on its own, segLoop); none yet: keep what is there
+    const gw = P.detW, gh = Math.max(8, Math.round(gw * sh / sw));
+    if (!segRes || segRes.W !== gw || segRes.H !== gh) return;
+    colorDet = segDetOf(segRes);
+    if (!selAt && !selMask) selAt = pickAt ? [pickAt[0] * gw, pickAt[1] * gh] : [gw / 2, gh / 2];
+    colorDet.ids = keepIds(colorDet.label, colorDet.comps.length);
+    det = P.onlyTapped ? tappedDet() : colorDet;
+    placeFaces(); return;
+  }
   if (!refs.length) {   // first run: pick at pickAt / the centre
     const d0 = ColorFind.analyse(src(), sw, sh, { ...P, refs: [] });
     const [u, v] = pickAt || [0.5, 0.5];
@@ -155,6 +169,68 @@ function detect() {
     colorDet.ids = keepIds(fm.label, fm.comps.length); }
   det = mode === 'photo' && P.sam && SamFind.ready && samFor === img ? samDet() : P.onlyTapped ? tappedDet() : colorDet;
   placeFaces();
+}
+// ---------------- SegNet (segnet.js): every pixel gets one of 171 kinds (wall, table, curtain, person ...); the
+// pieces are the connected places of one kind. It runs back to back in a worker (the camera) or once (a photo);
+// detect() takes its latest result
+let segRes = null, segFor = null, segRunning = false;
+const segSmooth = SegNet.smoother();
+async function segLoop() {
+  if (segRunning) return;
+  segRunning = true;
+  try {
+    await SegNet.load(status, { worker: true, up: 4 });
+    status('SegNet: 準備できました', 2000);
+    while (P.segBy === 'segnet') {
+      const [sw, sh] = srcSize();
+      if (!sw || (mode !== 'cam' && segFor === img)) { await new Promise((r) => setTimeout(r, 100)); continue; }
+      const gw = P.detW, gh = Math.max(8, Math.round(gw * sh / sw)), pic = img;
+      let r = await SegNet.run(src(), gw, gh, P.segSize);
+      if (mode === 'cam') r = segSmooth.apply(r, { hold: 3, sure: 0.9 }); else segSmooth.reset();
+      segRes = r; segFor = mode === 'cam' ? null : pic;
+      if (mode !== 'cam') redetect();   // the camera: detect() comes on its own
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  } catch (e) {
+    console.error(e); status('SegNet: 動きませんでした (' + (e.message || e) + ')', 6000);
+    P.segBy = 'color'; gui.controllersRecursive().forEach((c) => c.updateDisplay()); syncButtons(); redetect();
+  }
+  segRunning = false;
+}
+// SegNet's labels -> a detector result like the colour one: one label per connected place of one kind
+function segDetOf(r) {
+  const w = r.W, h = r.H, n = w * h, L = r.label, label = new Int32Array(n).fill(-1), comps = [], st = [];
+  for (let s0 = 0; s0 < n; s0++) {
+    if (label[s0] >= 0) continue;
+    const id = comps.length, c = L[s0], px = []; let x0 = w, x1 = 0;
+    label[s0] = id; st.push(s0);
+    while (st.length) {
+      const i = st.pop(), x = i % w, y = (i - x) / w; px.push(i); if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (x > 0 && label[i - 1] < 0 && L[i - 1] === c) { label[i - 1] = id; st.push(i - 1); }
+      if (x < w - 1 && label[i + 1] < 0 && L[i + 1] === c) { label[i + 1] = id; st.push(i + 1); }
+      if (y > 0 && label[i - w] < 0 && L[i - w] === c) { label[i - w] = id; st.push(i - w); }
+      if (y < h - 1 && label[i + w] < 0 && L[i + w] === c) { label[i + w] = id; st.push(i + w); }
+    }
+    const keep = px.length >= n * 0.002;
+    comps.push({ area: px.length, sky: 1, tex: -1, wid: x1 - x0 + 1, keep, cls: r.names ? r.names[c] : c });
+    if (!keep) for (const i of px) label[i] = -1;
+  }
+  // the pieces touch each other: the mask leaves out their borders, so each one's inside is measured on its own
+  const mask = new Uint8Array(n), white = new Float32Array(n);
+  let cover = 0;
+  for (let i = 0; i < n; i++) {
+    const k = label[i], x = i % w; if (k < 0) continue;
+    if ((x > 0 && label[i - 1] !== k) || (x < w - 1 && label[i + 1] !== k) || (i >= w && label[i - w] !== k) || (i < n - w && label[i + w] !== k)) continue;
+    mask[i] = 1; white[i] = 1; cover++;
+  }
+  CloudFind.boxBlur(white, w, h, 1);
+  return { w, h, mask, white, label, comps, cover: cover / n, D: ColorFind.distance(mask, w, h), thr: 0, thrMode: 'mask',
+    sky: new Uint8Array(n), open: new Uint8Array(n).fill(1), seg: true };
+}
+function segChanged() {
+  selMask = null; selAt = null; prevLab = null; faces = []; segRes = null; segFor = null; segSmooth.reset();
+  if (P.segBy === 'segnet') segLoop();
+  syncButtons(); redetect();
 }
 // only the piece(s) that were tapped, not every place of a like colour: a tap picks the colour and the piece under
 // the finger; from then on, each detection keeps the pieces that overlap what was kept the last time (the camera
@@ -513,6 +589,7 @@ cv.addEventListener('click', e => {
         .catch(console.error).finally(() => { samBusy = false; status(''); detect(); updateView(); });
       return;
     }
+    if (P.segBy === 'segnet') { selAdd = P.tap === 'add' || e.shiftKey; selAt = [x, y]; detect(); updateView(); return; }
     const lab = ColorFind.pick(det.sam ? colorDet : det, x, y, 2);
     if (!lab) return;
     selAdd = P.tap === 'add' || e.shiftKey;
@@ -530,10 +607,12 @@ addEventListener('resize', resize);
 // ---------------- buttons
 const $ = (id) => document.getElementById(id);
 function syncButtons() {
-  $('bAi').classList.toggle('on', P.sam); $('bAi').style.opacity = samBusy ? 0.55 : 1;
+  $('bSeg').innerHTML = P.segBy === 'segnet' ? '<b>🧩</b><small>SegNet</small>' : '<b>🎨</b><small>色</small>';
+  $('bAi').hidden = !Q.has('sam'); $('bAi').classList.toggle('on', P.sam); $('bAi').style.opacity = samBusy ? 0.55 : 1;
 }
 $('bPhoto').onclick = () => fileIn.click();
 $('bAi').onclick = () => { P.sam = !P.sam; gui.controllersRecursive().forEach(c => c.updateDisplay()); samToggled(); };
+$('bSeg').onclick = () => { P.segBy = P.segBy === 'segnet' ? 'color' : 'segnet'; gui.controllersRecursive().forEach((c) => c.updateDisplay()); segChanged(); };
 $('bMore').onclick = () => (gui._closed ? gui.open() : gui.close());
 // ---------------- recording: what the canvas shows (faces and names; not the buttons or the settings) -> a video file
 // tap: start / stop; then the button turns to 保存 (sharing a file needs a tap of its own on a phone)
@@ -574,6 +653,7 @@ function samToggled() { syncButtons(); if (P.sam) samStart(); else { status('');
 var gui = new lil.GUI({ title: 'Pick Doodle' });
 const redetect = () => { detect(); updateView(); };
 const photoCtl = gui.add(P, 'photoUrl', ['photos/woodblocks.jpg', 'photos/leaves.jpg', 'photos/bark2.jpg', 'photos/bark.jpg', 'photos/clouds.jpg', 'photos/clouds6.jpg']).name('見本の写真').onChange(loadPhoto);
+gui.add(P, 'segBy', { '色': 'color', 'SegNet（物の種類）': 'segnet' }).name('分け方').onChange(segChanged);
 gui.add(P, 'tap', { '拾う': 'pick', '足す': 'add', 'キャラ切替': 'face' }).name('タップ');
 const gk = gui.addFolder('動物');
 gk.add(P, 'kind', { '形から': 'auto', 'ネコかクマ（ランダム）': 'random', ...Object.fromEntries(KINDS.map((k) => [NAME[k] || k, k])) }).name('動物');
@@ -638,6 +718,7 @@ if (innerWidth < 700) gui.close();   // phones: the buttons first, the settings 
 
 resize();
 syncButtons();
+if (P.segBy === 'segnet') segLoop();
 // starts on the camera (a photo when there is none, it is refused, or ?nocam / ?photo=...)
 if (Q.has('cam') || !(Q.has('nocam') || Q.has('photo'))) startCam().then((ok) => { if (!ok) loadPhoto(P.photoUrl); });
 else loadPhoto(P.photoUrl);
