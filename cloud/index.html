@@ -64,17 +64,18 @@
   <button class="btn" id="ai" aria-label="AIで見る" hidden>AI</button>
   <button class="btn" id="shutter" aria-label="撮影"></button>
   <button class="btn" id="rec" aria-label="録画">●</button>
+  <button class="btn" id="flip" aria-label="カメラ切替（外側 / 自分側）">🔄</button>
   <button class="btn" id="more" aria-label="設定">⚙</button>
 </div>
 <input type="file" id="file" accept="image/*" hidden>
 <div id="msg"></div>
 <div id="flash"></div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=06db9a9"></script>
-<script src="../lib/cloudfind.js?v=06db9a9"></script>
-<script src="../lib/shapenet.js?v=06db9a9"></script>
-<script src="../lib/segnet.js?v=06db9a9"></script>
-<script src="../lib/segdraw.js?v=06db9a9"></script>
+<script src="../lib/doodle.js?v=3ec2ea4"></script>
+<script src="../lib/cloudfind.js?v=3ec2ea4"></script>
+<script src="../lib/shapenet.js?v=3ec2ea4"></script>
+<script src="../lib/segnet.js?v=3ec2ea4"></script>
+<script src="../lib/segdraw.js?v=3ec2ea4"></script>
 <script>
 // Cloud Faces: camera (or a photo) -> find the cloud bulges (cloudfind.js) several times a
 // second -> follow each bulge as a track -> doodle a cat / bear face on it (doodle.js).
@@ -119,7 +120,7 @@ loadShapeNet();
 const { KINDS, EXPRS, mulberry } = Doodle;
 const $ = (id) => document.getElementById(id);
 const cv = $('c'), ctx = cv.getContext('2d'), video = $('v');
-let mode = null, img = null, stream = null, facing = 'environment';
+let mode = null, img = null, stream = null, facing = new URLSearchParams(location.search).has('front') ? 'user' : 'environment';   // ?front: the front camera
 let det = null, tracks = [], nextId = 1, lastDet = 0, seedBase = Math.floor(Math.random() * 1e6);
 
 // ---------------- messages
@@ -161,6 +162,8 @@ const srcSize = () => mode === 'cam' ? [video.videoWidth, video.videoHeight] : i
 $('goCam').onclick = () => startCam();
 $('goPhoto').onclick = () => $('file').click();
 $('pick').onclick = () => $('file').click();
+// the back camera <-> the front one (a photo: back to the camera)
+$('flip').onclick = () => { if (mode === 'cam') facing = facing === 'environment' ? 'user' : 'environment'; startCam(); };
 $('file').onchange = (e) => { const f = e.target.files[0]; if (f) usePhoto(f); e.target.value = ''; };
 
 // ---------------- view: source cover-fit to the canvas

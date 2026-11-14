@@ -45,18 +45,19 @@
 <div id="bar">
   <button class="btn" id="bPhoto"><b>🖼</b><small>写真</small></button>
   <button id="bRec" aria-label="録画"><i></i></button>
+  <button class="btn" id="bFlip" aria-label="カメラ切替（外側 / 自分側）"><b>🔄</b><small>カメラ</small></button>
   <div id="segSw" role="radiogroup" aria-label="分け方"><button data-v="color" role="radio"><b>🎨</b><small>色</small></button><button data-v="segnet" role="radio"><b>🧠</b><small>SegNet</small></button></div>
   <button class="btn" id="bAi" hidden><b>✂️</b><small>AI</small></button>
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=06db9a9"></script>
-<script src="../lib/cloudfind.js?v=06db9a9"></script>
-<script src="../lib/shapenet.js?v=06db9a9"></script>
-<script src="../lib/colorfind.js?v=06db9a9"></script>
-<script src="../lib/segnet.js?v=06db9a9"></script>
-<script src="../lib/samfind.js?v=06db9a9"></script>
-<script src="../lib/namefind.js?v=06db9a9"></script>
+<script src="../lib/doodle.js?v=3ec2ea4"></script>
+<script src="../lib/cloudfind.js?v=3ec2ea4"></script>
+<script src="../lib/shapenet.js?v=3ec2ea4"></script>
+<script src="../lib/colorfind.js?v=3ec2ea4"></script>
+<script src="../lib/segnet.js?v=3ec2ea4"></script>
+<script src="../lib/samfind.js?v=3ec2ea4"></script>
+<script src="../lib/namefind.js?v=3ec2ea4"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -142,6 +143,7 @@ loadShapeNet();
 const cv = document.getElementById('c'), ctx = cv.getContext('2d'), video = document.getElementById('v');
 let img = null, det = null, faces = [];
 let mode = 'photo', stream = null;   // 'photo' (img) or 'cam' (the live video)
+let facing = Q.has('front') ? 'user' : 'environment';   // the back camera / 'user' the front one (?front)
 const src = () => (mode === 'cam' ? video : img);
 const srcSize = () => (mode === 'cam' ? [video.videoWidth, video.videoHeight] : img ? [img.width, img.height] : [0, 0]);
 const { KINDS, EXPRS, mulberry } = Doodle;
@@ -560,7 +562,7 @@ async function startCam() {
   try {
     stopCam();
     stream = await navigator.mediaDevices.getUserMedia({ audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+      video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } } });
     video.srcObject = stream; await video.play();
     mode = 'cam'; faces = []; objs = []; lastDet = 0;
     // keep the picked colours; with none yet, the first frame picks the centre
@@ -632,6 +634,12 @@ function syncButtons() {
 $('bPhoto').onclick = () => fileIn.click();
 $('bAi').onclick = () => { P.sam = !P.sam; gui.controllersRecursive().forEach(c => c.updateDisplay()); samToggled(); };
 for (const b of $('segSw').children) b.onclick = () => { if (P.segBy === b.dataset.v) return; P.segBy = b.dataset.v; gui.controllersRecursive().forEach((c) => c.updateDisplay()); segChanged(); };
+// the back camera <-> the front one (a new scene: what was tapped goes); on a photo: back to the camera
+$('bFlip').onclick = () => {
+  if (mode === 'cam') facing = facing === 'environment' ? 'user' : 'environment';
+  picks = []; refs = []; autoPick = true; prevLab = null; segRes = null; segSmooth.reset();
+  startCam();
+};
 $('bMore').onclick = () => (gui._closed ? gui.open() : gui.close());
 // ---------------- recording: what the canvas shows (faces and names; not the buttons or the settings) -> a video file
 // tap: start / stop; then the button turns to 保存 (sharing a file needs a tap of its own on a phone)
