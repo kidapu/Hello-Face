@@ -71,11 +71,11 @@
 <div id="msg"></div>
 <div id="flash"></div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=acf5e73"></script>
-<script src="../lib/cloudfind.js?v=acf5e73"></script>
-<script src="../lib/shapenet.js?v=acf5e73"></script>
-<script src="../lib/segnet.js?v=acf5e73"></script>
-<script src="../lib/segdraw.js?v=acf5e73"></script>
+<script src="../lib/doodle.js?v=143ebbc"></script>
+<script src="../lib/cloudfind.js?v=143ebbc"></script>
+<script src="../lib/shapenet.js?v=143ebbc"></script>
+<script src="../lib/segnet.js?v=143ebbc"></script>
+<script src="../lib/segdraw.js?v=143ebbc"></script>
 <script>
 // Cloud Faces: camera (or a photo) -> find the cloud bulges (cloudfind.js) several times a
 // second -> follow each bulge as a track -> doodle a cat / bear face on it (doodle.js).
@@ -216,8 +216,12 @@ function absorb(t, f, W) {
   else t.arms = f.arms.map((a, i) => { const c = t.arms[i]; return { sx: mix(c.sx, a.sx / W), sy: mix(c.sy, a.sy / W), x: mix(c.x, a.x / W), y: mix(c.y, a.y / W) }; });
   t.hits++; t.miss = 0;
 }
+// the region at a point (-1: none). Indoors (no blue sky: a plain brightness threshold) the detection numbers no
+// regions, so they are numbered here (connected parts of its mask)
 const labAt = (x, y) => { const X = Math.floor(x), Y = Math.floor(y);
-  return det && det.label && X >= 0 && Y >= 0 && X < det.w && Y < det.h ? det.label[Y * det.w + X] : -1; };
+  if (!det || X < 0 || Y < 0 || X >= det.w || Y >= det.h) return -1;
+  if (!det.label && !det._lab) det._lab = CloudFind.fromMask(det.mask, det.w, det.h, 0).label;
+  return (det.label || det._lab)[Y * det.w + X]; };
 function updateTracks(found, dt) {
   const W = det.w, used = new Set();
   // one face per region: the biggest one on it
