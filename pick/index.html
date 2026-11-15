@@ -51,13 +51,13 @@
   <button class="btn" id="bMore"><b>⚙</b><small>設定</small></button>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=f48d52b"></script>
-<script src="../lib/cloudfind.js?v=f48d52b"></script>
-<script src="../lib/shapenet.js?v=f48d52b"></script>
-<script src="../lib/colorfind.js?v=f48d52b"></script>
-<script src="../lib/segnet.js?v=f48d52b"></script>
-<script src="../lib/samfind.js?v=f48d52b"></script>
-<script src="../lib/namefind.js?v=f48d52b"></script>
+<script src="../lib/doodle.js?v=a7b40ab"></script>
+<script src="../lib/cloudfind.js?v=a7b40ab"></script>
+<script src="../lib/shapenet.js?v=a7b40ab"></script>
+<script src="../lib/colorfind.js?v=a7b40ab"></script>
+<script src="../lib/segnet.js?v=a7b40ab"></script>
+<script src="../lib/samfind.js?v=a7b40ab"></script>
+<script src="../lib/namefind.js?v=a7b40ab"></script>
 <script>
 // Pick Doodle: faces on the things of the colour you tap (wood blocks, leaves, rocks ...), split along strong
 // edges (colorfind.js); the faces are placed by CloudFind.find, and each thing's silhouette picks the animal
@@ -396,7 +396,7 @@ function placeFaces() {
   // the rules about the sky rather than the shape are off here (a very big piece -> whale, one of a flock of
   // small ones -> sheep, overcast -> one whale); a colour piece can hold many things (touching blocks), so no
   // limit of one face per piece there; an AI cut-out is one thing: one face
-  const o = { ...P, whaleArea: 9, whaleCover: 9, sheepCount: 1e9, learnContext: false, ...(det.sam ? { relMin: 0 } : P.onePer ? { perCloud: 1, bigCloud: 9, thinCloud: 0 } : { perCloud: 0 }) };
+  const o = { ...P, whaleArea: 9, whaleCover: 9, sheepCount: 1e9, learnContext: false, armMax: 1.8, ...(det.sam ? { relMin: 0 } : P.onePer ? { perCloud: 1, bigCloud: 9, thinCloud: 0 } : { perCloud: 0 }) };
   const found = CloudFind.find(det, o).map((f) => {
     const pid = !det.sam && f.lab >= 0 && colorDet.ids ? colorDet.ids[f.lab] : 0;
     if (pid && f.hint) { if (pieceKind.has(pid)) f.hint = pieceKind.get(pid); else pieceKind.set(pid, f.hint); }
@@ -426,6 +426,10 @@ function track(found, live) {
     let best = -1, bd = 1e9;
     // the same colour piece (by its id) first, wherever it moved; else the nearest one close by
     if (t.pid) best = found.findIndex((f, i) => !used.has(i) && f.pid === t.pid);
+    // else the one on the thing it is now over (its face was placed elsewhere on it: the same face moves there,
+    // not a second one fading in beside the old one)
+    const L = labAt(t.fx, t.fy);
+    if (best < 0 && L >= 0) best = found.findIndex((f, i) => !used.has(i) && f.lab === L);
     if (best < 0) found.forEach((f, i) => { if (used.has(i)) return; const d = Math.hypot(f.fx - t.fx, f.fy - t.fy);
       if (d < Math.max(t.r, f.r) * 1.3 && d < bd) { bd = d; best = i; } });
     if (best < 0) { t.miss++; if (live && t.miss < 4) out.push(t); continue; }
@@ -448,7 +452,24 @@ function track(found, live) {
     t.miss = 0; t.hits++; out.push(t);
   }
   found.forEach((f, i) => { if (!used.has(i)) { f.alpha = live ? 0 : 1; out.push(f); } });
-  return out;
+  // one face per thing: a lost one (fading out) goes at once when its thing / its place already has a face
+  const labs = new Set(), pids = new Set();
+  for (const f of out) if (!f.miss) { if (f.lab >= 0) labs.add(f.lab); if (f.pid) pids.add(f.pid); }
+  return out.filter((f) => !f.miss || !((f.pid && pids.has(f.pid)) || labs.has(labAt(f.fx, f.fy))));
+}
+function labAt(x, y) {   // the thing (label of det) at a point, -1: none
+  const X = Math.floor(x), Y = Math.floor(y);
+  return det && det.label && X >= 0 && Y >= 0 && X < det.w && Y < det.h ? det.label[Y * det.w + X] : -1;
+}
+// an arm that would reach over another animal's face is not drawn
+function armFree(f, a) {
+  for (const g of faces) {
+    if (g === f || g.alpha < 0.05) continue;
+    const vx = a.x - a.sx, vy = a.y - a.sy, l2 = vx * vx + vy * vy || 1;
+    const u = Math.max(0, Math.min(1, ((g.fx - a.sx) * vx + (g.fy - a.sy) * vy) / l2));
+    if (Math.hypot(a.sx + u * vx - g.fx, a.sy + u * vy - g.fy) < g.r * P.faceScale * 1.3) return false;
+  }
+  return true;
 }
 
 // ---------------- view mapping (detector px -> canvas px)
@@ -486,7 +507,7 @@ function drawFace(f, t, o) {
     ears: f.ears && f.ears.map(pt), paws: f.paws && f.paws.map(pt),
     wings: f.wings && f.wings.map(pt), holePoly: f.holePoly && f.holePoly.map(pt),
     tail: f.tail && pt(f.tail),
-    arms: P.arms && f.arms && f.arms.map((a) => { const [x0, y0] = toScr(a.sx + ox, a.sy + oy), [x1, y1] = toScr(a.x + ox, a.y + oy); return { sx: x0, sy: y0, x: x1, y: y1 }; }),
+    arms: P.arms && f.arms && f.arms.filter((a) => armFree(f, a)).map((a) => { const [x0, y0] = toScr(a.sx + ox, a.sy + oy), [x1, y1] = toScr(a.x + ox, a.y + oy); return { sx: x0, sy: y0, x: x1, y: y1 }; }),
     body: f.body && f.body.map((q) => ({ ...pt(q), half: q.half * view.k })) }, o);
   if (P.showName && f.alpha > 0.3) drawName(f, kind);
 }
