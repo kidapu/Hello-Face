@@ -71,11 +71,11 @@
 <div id="msg"></div>
 <div id="flash"></div>
 <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
-<script src="../lib/doodle.js?v=195ccc0"></script>
-<script src="../lib/cloudfind.js?v=195ccc0"></script>
-<script src="../lib/shapenet.js?v=195ccc0"></script>
-<script src="../lib/segnet.js?v=195ccc0"></script>
-<script src="../lib/segdraw.js?v=195ccc0"></script>
+<script src="../lib/doodle.js?v=acf5e73"></script>
+<script src="../lib/cloudfind.js?v=acf5e73"></script>
+<script src="../lib/shapenet.js?v=acf5e73"></script>
+<script src="../lib/segnet.js?v=acf5e73"></script>
+<script src="../lib/segdraw.js?v=acf5e73"></script>
 <script>
 // Cloud Faces: camera (or a photo) -> find the cloud bulges (cloudfind.js) several times a
 // second -> follow each bulge as a track -> doodle a cat / bear face on it (doodle.js).
@@ -223,6 +223,11 @@ function updateTracks(found, dt) {
   // one face per region: the biggest one on it
   if (P.onePer) { const seen = new Set();
     found = [...found].sort((a, b) => b.r - a.r).filter((f) => { const L = labAt(f.fx, f.fy); if (L < 0) return true; if (seen.has(L)) return false; seen.add(L); return true; }); }
+  // two faces on top of each other (two regions side by side, both faces pushed up to the same corner): the
+  // bigger one only (the check in CloudFind.find is on the regions' centres, not where the faces end up)
+  { const kept = [];
+    for (const f of [...found].sort((a, b) => b.r - a.r)) if (!kept.some((q) => Math.hypot(q.fx - f.fx, q.fy - f.fy) < (q.r + f.r) * P.faceScale)) kept.push(f);
+    found = kept; }
   // longest-lived tracks pick first
   for (const t of [...tracks].sort((a, b) => b.hits - a.hits)) {
     let best = -1, bd = 1e9;
@@ -242,6 +247,9 @@ function updateTracks(found, dt) {
   // a lost one (fading out) goes at once when its region already has a face
   if (P.onePer) { const live = new Set(tracks.filter((t) => !t.miss).map((t) => labAt(t.x * W, t.y * W)));
     tracks = tracks.filter((t) => !t.miss || !live.has(labAt(t.x * W, t.y * W)) || labAt(t.x * W, t.y * W) < 0); }
+  // a lost one under a live one goes at once too
+  const on = tracks.filter((t) => !t.miss);
+  tracks = tracks.filter((t) => !t.miss || !on.some((q) => Math.hypot(q.x - t.x, q.y - t.y) < (q.r + t.r) * P.faceScale));
 }
 // a hand that would reach over another animal's face is not drawn
 function armFree(t, a) {
